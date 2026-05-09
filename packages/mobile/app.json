@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "PunchClock Pro",
+    "slug": "punchclock-pro",
+    "version": "0.1.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "punchclock",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "pro.punchclock.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "PunchClock needs your location to verify your punches against your job site.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "PunchClock uses background location to remind you when you arrive at a job site.",
+        "NSFaceIDUsageDescription": "PunchClock uses Face ID to secure your kiosk session."
+      }
+    },
+    "android": {
+      "package": "pro.punchclock.app",
+      "adaptiveIcon": { "foregroundImage": "./assets/adaptive-icon.png", "backgroundColor": "#3b82f6" },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "USE_BIOMETRIC"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-location", { "locationAlwaysAndWhenInUsePermission": "Allow PunchClock to use your location." }]
+    ],
+    "experiments": { "typedRoutes": true }
+  }
+}
