@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './config/load-env.js';
 import http from 'node:http';
 import { createApp } from './app.js';
 import { corsOrigins, loadEnv } from './config/env.js';

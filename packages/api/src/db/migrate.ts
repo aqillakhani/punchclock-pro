@@ -5,10 +5,10 @@
  * applies any that have not already been recorded in `schema_migrations`.
  * Each file is executed inside a single transaction with RLS bypassed.
  */
+import '../config/load-env.js';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import 'dotenv/config';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getPool, withTenantTx, closePool } from '../config/database.js';
 import { logger } from '../config/logger.js';
 
@@ -50,8 +50,7 @@ export async function migrate(): Promise<void> {
   }
 }
 
-// Executed directly (via `pnpm db:migrate`).
-const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}`;
+const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 if (isMain) {
   migrate()
     .then(() => closePool())

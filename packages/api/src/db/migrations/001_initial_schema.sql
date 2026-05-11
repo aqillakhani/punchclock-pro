@@ -135,8 +135,13 @@ CREATE TABLE IF NOT EXISTS time_entry_events (
   PRIMARY KEY (id, recorded_at)
 );
 
+-- recorded_at is included because TimescaleDB requires any UNIQUE index on a
+-- hypertable to contain the partitioning column. App-level idempotency lookup
+-- in publisher.ts keys only on (org, user, client_generated_id), so retries
+-- with the same recorded_at are still rejected; clients are expected to
+-- preserve recorded_at across retries.
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_time_events_idempotency
-  ON time_entry_events (organization_id, user_id, client_generated_id)
+  ON time_entry_events (organization_id, user_id, client_generated_id, recorded_at)
   WHERE client_generated_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_time_events_org_user ON time_entry_events(organization_id, user_id, recorded_at DESC);
