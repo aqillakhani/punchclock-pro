@@ -76,7 +76,7 @@ export default function LoginPage() {
         </form>
         <p className="mt-6 text-center text-xs text-slate-500">
           First time setup?{' '}
-          <Link href="/" className="text-brand-700 hover:underline">
+          <Link href="/signup" className="text-brand-700 hover:underline">
             Bootstrap your organization
           </Link>
         </p>
