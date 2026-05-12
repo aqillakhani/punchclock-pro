@@ -1,9 +1,27 @@
 import Constants from 'expo-constants';
 
-const BASE_URL =
-  (Constants.expoConfig?.extra?.apiBaseUrl as string | undefined) ??
-  process.env.EXPO_PUBLIC_API_BASE_URL ??
-  'http://localhost:4000';
+function resolveBaseUrl(): string {
+  const explicit =
+    (Constants.expoConfig?.extra?.apiBaseUrl as string | undefined) ??
+    process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (explicit) return explicit;
+
+  // In Expo Go / dev client the Metro bundler URL contains the host
+  // laptop's LAN IP — reuse it so the phone can reach the API at :4000
+  // without any manual config.
+  const hostUri =
+    Constants.expoConfig?.hostUri ??
+    (Constants.expoGoConfig as { debuggerHost?: string } | undefined)?.debuggerHost;
+  if (hostUri) {
+    const host = hostUri.split(':')[0];
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return `http://${host}:4000`;
+    }
+  }
+  return 'http://localhost:4000';
+}
+
+const BASE_URL = resolveBaseUrl();
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
