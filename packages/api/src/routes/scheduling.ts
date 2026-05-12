@@ -48,7 +48,9 @@ schedulingRouter.get(
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const { rows } = await db.query(
-      `SELECT id, user_id, scheduled_date, shift_start, shift_end, duration_minutes,
+      `SELECT id, user_id,
+              to_char(scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+              shift_start, shift_end, duration_minutes,
               shift_type, required_break_minutes, status, notes, created_at
        FROM shifts ${where}
        ORDER BY scheduled_date ASC, shift_start ASC
@@ -72,7 +74,8 @@ schedulingRouter.post(
          (organization_id, user_id, scheduled_date, shift_start, shift_end,
           duration_minutes, shift_type, required_break_minutes, notes)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, user_id, scheduled_date, shift_start, shift_end, duration_minutes, shift_type, status`,
+       RETURNING id, user_id, to_char(scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+                 shift_start, shift_end, duration_minutes, shift_type, status`,
       [
         req.user.organizationId,
         req.body.userId,
