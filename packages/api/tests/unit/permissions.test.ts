@@ -74,6 +74,7 @@ const EXPECTED_MATRIX: Record<Action, Record<Role, boolean>> = {
     viewer: false,
   },
   [PERMISSIONS.EDIT_GEOFENCE]: { owner: true, manager: true, employee: false, viewer: false },
+  [PERMISSIONS.PREVIEW_AS_USER]: { owner: true, manager: false, employee: false, viewer: false },
 };
 
 const ALL_ROLES: readonly Role[] = [ROLES.OWNER, ROLES.MANAGER, ROLES.EMPLOYEE, ROLES.VIEWER];

@@ -51,6 +51,13 @@ export function verifyAppJwt(token: string): AuthenticatedUser {
 /**
  * Require a valid JWT on the request. Extracts from the Authorization
  * header (`Bearer <token>`) or the `pc_token` cookie.
+ *
+ * Owners may also send `X-Preview-As-User-Id: <uuid>` to render the
+ * dashboard as that user — every request runs with the previewed
+ * identity (role + userId), but only when the *real* JWT belongs to
+ * an owner. The substitution happens in `withTenantDb` because that's
+ * where we have a database connection to look up the previewed user;
+ * here we just stash the request to honor.
  */
 export function requireAuth(): RequestHandler {
   return (req, _res, next) => {
@@ -63,6 +70,15 @@ export function requireAuth(): RequestHandler {
     }
     if (!token) throw AppError.unauthorized('Missing authentication token');
     req.user = verifyAppJwt(token);
+
+    const previewHeader = req.headers['x-preview-as-user-id'];
+    if (typeof previewHeader === 'string' && previewHeader.length > 0) {
+      // Only owners may impersonate; others get the header silently
+      // ignored (don't leak whether the id exists).
+      if (req.user.role === 'owner' && previewHeader !== req.user.userId) {
+        (req as unknown as { previewAsUserId?: string }).previewAsUserId = previewHeader;
+      }
+    }
     next();
   };
 }

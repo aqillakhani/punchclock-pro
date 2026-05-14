@@ -1,10 +1,11 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PERMISSIONS, can, type Action, type Role } from '@punchclock/shared';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, getPreviewAsUserId, setPreviewAsUserId } from '@/lib/api-client';
 import { clearToken } from '@/lib/auth';
 
 interface Me {
@@ -74,6 +75,12 @@ const NAV: NavItem[] = [
     requires: PERMISSIONS.VIEW_AUDIT_LOG,
   },
   {
+    href: '/dashboard/preview-as',
+    label: 'Preview as…',
+    icon: '◐',
+    requires: PERMISSIONS.PREVIEW_AS_USER,
+  },
+  {
     href: '/dashboard/settings',
     label: 'Settings',
     icon: '✦',
@@ -89,6 +96,7 @@ export function visibleNavFor(role: Role | undefined): NavItem[] {
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const qc = useQueryClient();
 
   const me = useQuery<Me>({
     queryKey: ['auth', 'me'],
@@ -96,8 +104,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Render the preview banner when the owner has flipped on "preview
+  // as worker". The header is sent on every request automatically by
+  // api-client; we just need to keep state for the banner UI.
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  useEffect(() => {
+    setPreviewing(getPreviewAsUserId());
+  }, [me.data?.id]);
+
+  function exitPreview() {
+    setPreviewAsUserId(null);
+    setPreviewing(null);
+    qc.invalidateQueries();
+    router.push('/dashboard');
+  }
+
   function signOut() {
     clearToken();
+    setPreviewAsUserId(null);
     router.replace('/login');
   }
 
@@ -168,7 +192,27 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </aside>
-      <main className="flex-1 p-8">{children}</main>
+      <main className="flex-1">
+        {previewing && me.data && (
+          <div className="sticky top-0 z-20 flex items-center justify-between border-b border-amber-300 bg-amber-100 px-6 py-2 text-sm text-amber-900">
+            <span>
+              <span className="font-medium">
+                Previewing as {displayName(me.data) ?? me.data.email}
+              </span>{' '}
+              <span className="text-amber-800">({me.data.role})</span> — your real owner session is
+              still in place.
+            </span>
+            <button
+              type="button"
+              onClick={exitPreview}
+              className="rounded-md bg-amber-200 px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-300"
+            >
+              Exit preview
+            </button>
+          </div>
+        )}
+        <div className="p-8">{children}</div>
+      </main>
     </div>
   );
 }

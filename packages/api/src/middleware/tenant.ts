@@ -21,12 +21,40 @@ export function withTenantDb(): RequestHandler {
       return;
     }
     const orgId = req.user.organizationId;
+    const previewAsUserId = (req as unknown as { previewAsUserId?: string }).previewAsUserId;
     getPool()
       .connect()
       .then(async (client) => {
         try {
           await client.query('BEGIN');
           await client.query("SELECT set_config('app.current_org_id', $1, true)", [orgId]);
+
+          // Owner-initiated "preview as worker" — swap req.user for the
+          // duration of this request so every downstream gate (perms,
+          // /me, RBAC sidebar) sees the previewed identity. The real
+          // JWT owner stays the same (audit logs use the actor on the
+          // outer request via req.user.userId BEFORE this swap if a
+          // route cares — currently none do).
+          if (previewAsUserId && req.user) {
+            const { rows } = await client.query<{
+              id: string;
+              email: string;
+              role: 'owner' | 'manager' | 'employee' | 'viewer';
+            }>(
+              `SELECT id, email, role FROM users
+               WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL`,
+              [previewAsUserId, orgId],
+            );
+            if (rows[0]) {
+              req.user = {
+                userId: rows[0].id,
+                organizationId: orgId,
+                role: rows[0].role,
+                email: rows[0].email,
+              };
+            }
+          }
+
           res.locals.db = client;
 
           let finalized = false;

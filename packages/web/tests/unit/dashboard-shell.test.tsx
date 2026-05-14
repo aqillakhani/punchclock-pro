@@ -45,7 +45,7 @@ describe('DashboardShell sidebar gating', () => {
     expect(labels).not.toContain('Audit log');
   });
 
-  it('shows everything for the owner including Settings and Audit log', () => {
+  it('shows everything for the owner including Settings, Audit log, and Preview as…', () => {
     const labels = labelsFor('owner');
     for (const required of [
       'Overview',
@@ -59,6 +59,7 @@ describe('DashboardShell sidebar gating', () => {
       'Timesheets',
       'Reports',
       'Audit log',
+      'Preview as…',
       'Settings',
     ]) {
       expect(labels).toContain(required);

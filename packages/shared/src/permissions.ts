@@ -59,6 +59,9 @@ export const PERMISSIONS = {
 
   // Geofences (manager+ admin).
   EDIT_GEOFENCE: 'edit:geofence',
+
+  // Preview-as: owner-only "see the dashboard as an employee" mode.
+  PREVIEW_AS_USER: 'preview:as-user',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -98,6 +101,7 @@ const OWNER_PERMISSIONS: ReadonlySet<Action> = new Set<Action>([
   PERMISSIONS.UPLOAD_DOCUMENTS_OWN,
   PERMISSIONS.VIEW_DOCUMENTS_OTHERS,
   PERMISSIONS.EDIT_GEOFENCE,
+  PERMISSIONS.PREVIEW_AS_USER,
 ]);
 
 const MANAGER_PERMISSIONS: ReadonlySet<Action> = new Set<Action>([
