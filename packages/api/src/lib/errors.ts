@@ -81,6 +81,14 @@ export class AppError extends Error {
     );
   }
 
+  static scheduleConflict(details: {
+    conflict: 'overlap' | 'weekly_cap' | 'rest_period';
+    message: string;
+    [k: string]: unknown;
+  }): AppError {
+    return new AppError('SCHEDULE_CONFLICT', details.message, HTTP_STATUS.CONFLICT, details);
+  }
+
   static predictiveLock(details: {
     scheduledDate: string;
     noticeDays: number;
