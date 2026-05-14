@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
-import { PERMISSIONS, ROLES, inviteUserSchema, organizationUpdateSchema } from '@punchclock/shared';
+import {
+  PERMISSIONS,
+  ROLES,
+  inviteUserSchema,
+  organizationUpdateSchema,
+  shiftTradeDecisionSchema,
+  timeOffDecisionSchema,
+} from '@punchclock/shared';
 import { loadEnv } from '../config/env.js';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
@@ -9,6 +16,7 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
+import { enumerateDates, materializeTimeOffShifts } from '../services/time-off.service.js';
 
 export const adminRouter = Router();
 
@@ -266,6 +274,179 @@ adminRouter.get(
     });
 
     ok(res, payload);
+  }),
+);
+
+// ---- Time-off admin queue + decisions -----------------------------
+
+adminRouter.get(
+  '/time-off',
+  requirePermission(PERMISSIONS.APPROVE_TIME_OFF),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const status = typeof req.query.status === 'string' ? req.query.status : null;
+    const params: unknown[] = [];
+    const where: string[] = [];
+    if (status) {
+      params.push(status);
+      where.push(`t.status = $${params.length}`);
+    }
+    const sql = `
+      SELECT t.id,
+             to_char(t.start_date, 'YYYY-MM-DD') AS start_date,
+             to_char(t.end_date,   'YYYY-MM-DD') AS end_date,
+             t.reason, t.status, t.decided_by, t.decided_at, t.created_at,
+             u.id AS user_id, u.email, u.first_name, u.last_name
+      FROM time_off_requests t
+      JOIN users u ON u.id = t.user_id
+      ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY t.created_at DESC
+      LIMIT 200`;
+    const { rows } = await db.query(sql, params);
+    ok(res, rows);
+  }),
+);
+
+adminRouter.post(
+  '/time-off/:id/decision',
+  requirePermission(PERMISSIONS.APPROVE_TIME_OFF),
+  validateBody(timeOffDecisionSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const requestId = req.params.id;
+    if (!requestId) throw AppError.validation('time-off id required');
+
+    const { rows: existing } = await db.query<{
+      id: string;
+      user_id: string;
+      start_date: string;
+      end_date: string;
+      status: string;
+    }>(
+      `SELECT id, user_id,
+              to_char(start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(end_date,   'YYYY-MM-DD') AS end_date,
+              status
+       FROM time_off_requests WHERE id = $1`,
+      [requestId],
+    );
+    if (existing.length === 0) throw AppError.notFound('Time-off request');
+    const tor = existing[0]!;
+    if (tor.status !== 'pending') {
+      throw AppError.conflict(`Request already ${tor.status}`);
+    }
+
+    const newStatus = req.body.decision === 'approved' ? 'approved' : 'rejected';
+    const { rows: updated } = await db.query(
+      `UPDATE time_off_requests
+       SET status = $1, decided_by = $2, decided_at = NOW(), updated_at = NOW(),
+           reason = CASE WHEN $3::text IS NULL THEN reason
+                         ELSE COALESCE(reason, '') ||
+                              CASE WHEN reason IS NULL OR reason = '' THEN ''
+                                   ELSE ' — ' END || $3 END
+       WHERE id = $4
+       RETURNING id, status, decided_by, decided_at`,
+      [newStatus, req.user.userId, req.body.comment ?? null, requestId],
+    );
+
+    let placeholderShifts = 0;
+    if (newStatus === 'approved') {
+      placeholderShifts = await materializeTimeOffShifts(db, {
+        organizationId: req.user.organizationId,
+        userId: tor.user_id,
+        startDate: tor.start_date,
+        endDate: tor.end_date,
+        requestId,
+      });
+    }
+
+    ok(res, { ...updated[0], placeholderShifts });
+  }),
+);
+
+// ---- Shift trade admin queue + decisions --------------------------
+
+adminRouter.get(
+  '/shift-trade',
+  requirePermission(PERMISSIONS.APPROVE_TRADE),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const status = typeof req.query.status === 'string' ? req.query.status : null;
+    const params: unknown[] = [];
+    const where: string[] = [];
+    if (status) {
+      params.push(status);
+      where.push(`st.status = $${params.length}`);
+    }
+    const sql = `
+      SELECT st.id, st.shift_id, st.from_user_id, st.to_user_id, st.status,
+             st.decided_by, st.decided_at, st.created_at,
+             fu.email AS from_email, fu.first_name AS from_first_name,
+             fu.last_name AS from_last_name,
+             tu.email AS to_email, tu.first_name AS to_first_name,
+             tu.last_name AS to_last_name,
+             to_char(s.scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+             s.shift_start, s.shift_end, s.duration_minutes
+      FROM shift_trades st
+      JOIN shifts s ON s.id = st.shift_id
+      JOIN users  fu ON fu.id = st.from_user_id
+      LEFT JOIN users tu ON tu.id = st.to_user_id
+      ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY st.created_at DESC
+      LIMIT 200`;
+    const { rows } = await db.query(sql, params);
+    ok(res, rows);
+  }),
+);
+
+adminRouter.post(
+  '/shift-trade/:id/decision',
+  requirePermission(PERMISSIONS.APPROVE_TRADE),
+  validateBody(shiftTradeDecisionSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const tradeId = req.params.id;
+    if (!tradeId) throw AppError.validation('trade id required');
+
+    const { rows: existing } = await db.query<{
+      shift_id: string;
+      to_user_id: string | null;
+      status: string;
+    }>(`SELECT shift_id, to_user_id, status FROM shift_trades WHERE id = $1`, [tradeId]);
+    if (existing.length === 0) throw AppError.notFound('Shift trade');
+    const trade = existing[0]!;
+    if (trade.status !== 'accepted') {
+      // Manager decides only after a worker has accepted; otherwise
+      // there's nothing to confirm.
+      throw AppError.conflict(`Trade is not awaiting manager decision (status=${trade.status})`);
+    }
+    if (!trade.to_user_id) {
+      throw AppError.conflict('Trade has no accepting worker assigned');
+    }
+
+    const newStatus = req.body.decision === 'approved' ? 'approved' : 'rejected';
+    const { rows: updated } = await db.query(
+      `UPDATE shift_trades
+       SET status = $1, decided_by = $2, decided_at = NOW(), updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, shift_id, from_user_id, to_user_id, status, decided_at`,
+      [newStatus, req.user.userId, tradeId],
+    );
+
+    // On approval, swap the shift's user. (Rejection: trade closes,
+    // shift stays with the original owner.)
+    if (newStatus === 'approved') {
+      await db.query(`UPDATE shifts SET user_id = $1, updated_at = NOW() WHERE id = $2`, [
+        trade.to_user_id,
+        trade.shift_id,
+      ]);
+    }
+
+    ok(res, updated[0]);
   }),
 );
 
