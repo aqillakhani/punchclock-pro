@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { PERMISSIONS, can, type Role } from '@punchclock/shared';
 import { apiClient } from '@/lib/api-client';
 
 interface TimesheetRow {
@@ -35,6 +36,14 @@ export default function ReportsPage() {
   const [to, setTo] = useState(defaultTo);
   const [jurisdiction, setJurisdiction] = useState<'federal' | 'california'>('federal');
 
+  const me = useQuery<{ role: Role }>({
+    queryKey: ['auth', 'me'],
+    queryFn: () => apiClient.get('/auth/me'),
+    staleTime: 5 * 60 * 1000,
+  });
+  const role = me.data?.role;
+  const canExportPayroll = role ? can(role, PERMISSIONS.EXPORT_PAYROLL) : false;
+
   const rows = useQuery<TimesheetRow[]>({
     queryKey: ['admin', 'timesheets', from, to, jurisdiction],
     queryFn: () =>
@@ -60,6 +69,44 @@ export default function ReportsPage() {
     const end = new Date();
     setFrom(toIsoDate(addDays(end, -(days - 1))));
     setTo(toIsoDate(end));
+  }
+
+  async function downloadAuthed(path: string, filename: string) {
+    const token =
+      typeof document === 'undefined'
+        ? null
+        : (document.cookie.match(/(?:^|;\s*)pc_token=([^;]+)/)?.[1] ?? null);
+    const base =
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE_URL) ??
+      'http://localhost:4000';
+    const res = await fetch(`${base}${path}`, {
+      headers: token ? { Authorization: `Bearer ${decodeURIComponent(token)}` } : undefined,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Export failed (${res.status}): ${text.slice(0, 200)}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function downloadIIF() {
+    void downloadAuthed(
+      `/api/v1/admin/exports/payroll.iif?from=${from}&to=${to}&jurisdiction=${jurisdiction}`,
+      `payroll_${from}_to_${to}.iif`,
+    ).catch((e) => alert(e.message));
+  }
+
+  function downloadQboJson() {
+    void downloadAuthed(
+      `/api/v1/admin/exports/payroll.qbo.json?from=${from}&to=${to}&jurisdiction=${jurisdiction}`,
+      `payroll_${from}_to_${to}.qbo.json`,
+    ).catch((e) => alert(e.message));
   }
 
   function downloadCsv() {
@@ -108,14 +155,38 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-semibold text-slate-900">Reports</h1>
           <p className="text-sm text-slate-600">Hours and payroll summary for a date range.</p>
         </div>
-        <button
-          type="button"
-          onClick={downloadCsv}
-          disabled={!rows.data || rows.data.length === 0}
-          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:opacity-60"
-        >
-          ⬇ Export CSV
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={downloadCsv}
+            disabled={!rows.data || rows.data.length === 0}
+            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+          >
+            ⬇ CSV
+          </button>
+          {canExportPayroll && (
+            <>
+              <button
+                type="button"
+                onClick={downloadIIF}
+                disabled={!rows.data || rows.data.length === 0}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+                title="QuickBooks Desktop import format"
+              >
+                ⬇ QuickBooks (.iif)
+              </button>
+              <button
+                type="button"
+                onClick={downloadQboJson}
+                disabled={!rows.data || rows.data.length === 0}
+                className="rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:opacity-60"
+                title="QuickBooks Online JournalEntry payload"
+              >
+                ⬇ QBO (.json)
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

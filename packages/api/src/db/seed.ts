@@ -280,8 +280,14 @@ async function seed(): Promise<void> {
 
     const slug = `quick-stop-4-${Date.now()}`;
     const orgRes = await client.query<{ id: string }>(
-      `INSERT INTO organizations (name, slug, timezone, geofencing_enabled, break_tracking_enabled)
-       VALUES ($1, $2, $3, TRUE, TRUE) RETURNING id`,
+      `INSERT INTO organizations
+         (name, slug, timezone, geofencing_enabled, break_tracking_enabled,
+          weekly_labor_budget,
+          qb_chart_of_accounts)
+       VALUES ($1, $2, $3, TRUE, TRUE,
+               6500.00,
+               '{"laborExpense":"5100 · Labor Expense","contractorExpense":"5200 · Contractor Expense"}'::jsonb)
+       RETURNING id`,
       [STORE.name, slug, STORE.timezone],
     );
     const orgId = orgRes.rows[0]!.id;
