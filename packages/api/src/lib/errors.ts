@@ -28,12 +28,7 @@ export class AppError extends Error {
   }
 
   static validation(message: string, details?: unknown): AppError {
-    return new AppError(
-      ERROR_CODES.VALIDATION,
-      message,
-      HTTP_STATUS.UNPROCESSABLE_ENTITY,
-      details,
-    );
+    return new AppError(ERROR_CODES.VALIDATION, message, HTTP_STATUS.UNPROCESSABLE_ENTITY, details);
   }
 
   static alreadyClockedIn(): AppError {
@@ -57,6 +52,22 @@ export class AppError extends Error {
       ERROR_CODES.GEOFENCE_VIOLATION,
       'Punch rejected by geofence policy',
       HTTP_STATUS.FORBIDDEN,
+      details,
+    );
+  }
+
+  static capExceeded(details: {
+    scope: 'daily' | 'weekly';
+    cap: number;
+    current: number;
+  }): AppError {
+    const scopeLabel = details.scope === 'daily' ? 'Daily' : 'Weekly';
+    const hours = details.cap / 60;
+    const hoursLabel = Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
+    return new AppError(
+      ERROR_CODES.CAP_EXCEEDED,
+      `${scopeLabel} ${hoursLabel}-hour cap reached`,
+      HTTP_STATUS.CONFLICT,
       details,
     );
   }

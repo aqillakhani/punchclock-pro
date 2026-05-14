@@ -10,6 +10,13 @@ import {
 import { AppError } from '../lib/errors.js';
 import { publishTimeEvent } from '../events/publisher.js';
 import { evaluateGeofence } from './geofence.service.js';
+import {
+  evaluateCaps,
+  loadAccumulatedMinutes,
+  loadOrgCapContext,
+  loadUserCapContext,
+  type CapWarning,
+} from './caps.service.js';
 
 interface TimeEntryRow {
   id: string;
@@ -90,6 +97,7 @@ export interface PunchInResult {
     geofenceId: string | null;
     enforcementLevel: string;
   };
+  warnings?: CapWarning[];
 }
 
 export async function punchIn(
@@ -107,10 +115,9 @@ export async function punchIn(
     [user.organizationId, user.userId, input.clientGeneratedId],
   );
   if (existingEvent.rows[0]?.time_entry_id) {
-    const { rows } = await db.query<TimeEntryRow>(
-      'SELECT * FROM time_entries WHERE id = $1',
-      [existingEvent.rows[0].time_entry_id],
-    );
+    const { rows } = await db.query<TimeEntryRow>('SELECT * FROM time_entries WHERE id = $1', [
+      existingEvent.rows[0].time_entry_id,
+    ]);
     if (rows[0]) {
       return {
         timeEntry: rowToTimeEntry(rows[0]),
@@ -138,6 +145,28 @@ export async function punchIn(
       distanceMeters: decision.distanceMeters,
       geofenceId: decision.geofence?.id,
     });
+  }
+
+  // 3.5. Hard-cap enforcement (W-2 only, opt-out via cap_exempt_until
+  //      or org-level enforcement='off'). Geofence is offshore-skipped
+  //      elsewhere; here we sum completed minutes today + this week.
+  const [userCtx, orgCtx] = await Promise.all([
+    loadUserCapContext(db, user.userId),
+    loadOrgCapContext(db),
+  ]);
+  const accumulated = await loadAccumulatedMinutes(db, user.userId, orgCtx.timezone);
+  const capDecision = evaluateCaps({
+    workerType: userCtx.workerType,
+    enforcement: orgCtx.enforcement,
+    todayMinutes: accumulated.todayMinutes,
+    weekMinutes: accumulated.weekMinutes,
+    maxDailyMinutes: orgCtx.maxDailyMinutes,
+    maxWeeklyMinutes: orgCtx.maxWeeklyMinutes,
+    capExemptUntil: userCtx.capExemptUntil,
+    now: new Date(),
+  });
+  if (!capDecision.allowed && capDecision.blockReason) {
+    throw AppError.capExceeded(capDecision.blockReason);
   }
 
   // 4. Insert the materialized row.
@@ -190,6 +219,7 @@ export async function punchIn(
       geofenceId: decision.geofence?.id ?? null,
       enforcementLevel: decision.enforcementLevel,
     },
+    ...(capDecision.warnings.length > 0 ? { warnings: capDecision.warnings } : {}),
   };
 }
 
@@ -206,10 +236,9 @@ export async function punchOut(
     [user.organizationId, user.userId, input.clientGeneratedId],
   );
   if (existingEvent.rows[0]?.time_entry_id) {
-    const { rows } = await db.query<TimeEntryRow>(
-      'SELECT * FROM time_entries WHERE id = $1',
-      [existingEvent.rows[0].time_entry_id],
-    );
+    const { rows } = await db.query<TimeEntryRow>('SELECT * FROM time_entries WHERE id = $1', [
+      existingEvent.rows[0].time_entry_id,
+    ]);
     if (rows[0]) return rowToTimeEntry(rows[0]);
   }
 
