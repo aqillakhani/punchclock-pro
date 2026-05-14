@@ -56,6 +56,31 @@ export class AppError extends Error {
     );
   }
 
+  static pinRequired(): AppError {
+    return new AppError(
+      'PIN_REQUIRED',
+      'PIN required for this punch — set yours in the Clock screen.',
+      HTTP_STATUS.UNPROCESSABLE_ENTITY,
+    );
+  }
+
+  static pinInvalid(): AppError {
+    return new AppError(
+      'PIN_INVALID',
+      'Incorrect PIN. Try again.',
+      HTTP_STATUS.UNPROCESSABLE_ENTITY,
+    );
+  }
+
+  static ipRestricted(details: { clientIp: string }): AppError {
+    return new AppError(
+      'IP_RESTRICTED',
+      'Punches from this network are not allowed.',
+      HTTP_STATUS.FORBIDDEN,
+      details,
+    );
+  }
+
   static capExceeded(details: {
     scope: 'daily' | 'weekly';
     cap: number;

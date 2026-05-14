@@ -52,6 +52,8 @@ export const timeEntryStatusSchema = z.enum([
 
 // ---- Request schemas ----
 
+export const pinSchema = z.string().regex(/^\d{4,8}$/, 'PIN must be 4–8 digits');
+
 export const punchInRequestSchema = z.object({
   clientGeneratedId: z.string().min(1).max(128),
   timestamp: isoTimestampSchema,
@@ -61,7 +63,20 @@ export const punchInRequestSchema = z.object({
   overrideReason: z.string().max(512).optional(),
   jobId: uuidSchema.optional(),
   notes: z.string().max(1024).optional(),
+  pin: pinSchema.optional(),
 });
+
+export const setPinSchema = z
+  .object({
+    pin: pinSchema,
+    confirmPin: pinSchema,
+  })
+  .refine((v) => v.pin === v.confirmPin, {
+    message: 'PINs do not match',
+    path: ['confirmPin'],
+  });
+
+export type SetPinInput = z.infer<typeof setPinSchema>;
 
 export const punchOutRequestSchema = z.object({
   clientGeneratedId: z.string().min(1).max(128),
@@ -131,11 +146,48 @@ export const loginRequestSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+const verificationMethodSchema = z.enum(['selfie', 'pin', 'ip', 'device']);
+
+// Loose CIDR validation — full v4/v6 parsing is the API's job.
+// `::/0` is accepted as an explicit "match any IP" wildcard.
+const cidrSchema = z
+  .string()
+  .regex(
+    /^(?:::\/0|([0-9]{1,3}\.){3}[0-9]{1,3}\/(3[0-2]|[12]?\d))$/,
+    'Each entry must be a valid IPv4 CIDR (e.g. "73.42.18.0/24") or "::/0"',
+  );
+
 export const organizationUpdateSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   timezone: z.string().min(1).max(50).optional(),
   geofencingEnabled: z.boolean().optional(),
   breakTrackingEnabled: z.boolean().optional(),
+  // Hour caps + budget (Phase A scaffold; Phase C surfaces UI)
+  maxDailyMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(24 * 60)
+    .optional(),
+  maxWeeklyMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(7 * 24 * 60)
+    .optional(),
+  capEnforcement: z.enum(['off', 'warn', 'block']).optional(),
+  weeklyLaborBudget: z.number().nonnegative().optional().nullable(),
+  // Punch verification multi-select + CIDR ranges
+  punchVerificationMethods: z.array(verificationMethodSchema).max(4).optional(),
+  allowedPunchCidrs: z.array(cidrSchema).max(50).optional(),
+  // Feature flags (B7 + Phase D)
+  featureCashDrawer: z.boolean().optional(),
+  featureKioskQr: z.boolean().optional(),
+  featurePredictiveScheduling: z.boolean().optional(),
+  featureDocuments: z.boolean().optional(),
+  featureTimeOff: z.boolean().optional(),
+  featureShiftTrades: z.boolean().optional(),
+  featurePushNotifications: z.boolean().optional(),
 });
 
 // ---- Time-off + shift trades (v2 self-service) ----

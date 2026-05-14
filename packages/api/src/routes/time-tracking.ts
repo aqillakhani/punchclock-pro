@@ -31,7 +31,7 @@ timeTrackingRouter.post(
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
-    const result = await punchIn(db, req.user, req.body);
+    const result = await punchIn(db, req.user, req.body, { clientIp: req.ip ?? null });
     created(res, result);
   }),
 );

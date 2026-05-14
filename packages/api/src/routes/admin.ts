@@ -29,7 +29,14 @@ adminRouter.get(
     if (!db) throw AppError.unauthorized();
     const { rows } = await db.query(
       `SELECT id, name, slug, timezone, industry,
-              geofencing_enabled, break_tracking_enabled, created_at
+              geofencing_enabled, break_tracking_enabled,
+              max_daily_minutes, max_weekly_minutes, cap_enforcement,
+              weekly_labor_budget, qb_chart_of_accounts, fx_rates,
+              punch_verification_methods, allowed_punch_cidrs,
+              feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
+              feature_documents, feature_time_off, feature_shift_trades,
+              feature_push_notifications,
+              created_at
        FROM organizations LIMIT 1`,
     );
     ok(res, rows[0] ?? null);
@@ -45,11 +52,24 @@ adminRouter.patch(
     if (!db || !req.user) throw AppError.unauthorized();
     const fields: string[] = [];
     const values: unknown[] = [];
+
+    // Scalar columns mapped 1:1 from request body to db.
     const mapping: Record<string, string> = {
       name: 'name',
       timezone: 'timezone',
       geofencingEnabled: 'geofencing_enabled',
       breakTrackingEnabled: 'break_tracking_enabled',
+      maxDailyMinutes: 'max_daily_minutes',
+      maxWeeklyMinutes: 'max_weekly_minutes',
+      capEnforcement: 'cap_enforcement',
+      weeklyLaborBudget: 'weekly_labor_budget',
+      featureCashDrawer: 'feature_cash_drawer',
+      featureKioskQr: 'feature_kiosk_qr',
+      featurePredictiveScheduling: 'feature_predictive_scheduling',
+      featureDocuments: 'feature_documents',
+      featureTimeOff: 'feature_time_off',
+      featureShiftTrades: 'feature_shift_trades',
+      featurePushNotifications: 'feature_push_notifications',
     };
     for (const [key, column] of Object.entries(mapping)) {
       if (key in req.body) {
@@ -57,12 +77,26 @@ adminRouter.patch(
         fields.push(`${column} = $${values.length}`);
       }
     }
+    // JSONB columns need JSON.stringify so pg encodes them correctly.
+    if ('punchVerificationMethods' in req.body) {
+      values.push(JSON.stringify(req.body.punchVerificationMethods));
+      fields.push(`punch_verification_methods = $${values.length}::jsonb`);
+    }
+    if ('allowedPunchCidrs' in req.body) {
+      values.push(JSON.stringify(req.body.allowedPunchCidrs));
+      fields.push(`allowed_punch_cidrs = $${values.length}::jsonb`);
+    }
     if (fields.length === 0) throw AppError.validation('No updatable fields');
     values.push(req.user.organizationId);
     const { rows } = await db.query(
       `UPDATE organizations SET ${fields.join(', ')}, updated_at = NOW()
        WHERE id = $${values.length}
-       RETURNING id, name, slug, timezone, geofencing_enabled, break_tracking_enabled`,
+       RETURNING id, name, slug, timezone, geofencing_enabled, break_tracking_enabled,
+                 max_daily_minutes, max_weekly_minutes, cap_enforcement,
+                 weekly_labor_budget, punch_verification_methods, allowed_punch_cidrs,
+                 feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
+                 feature_documents, feature_time_off, feature_shift_trades,
+                 feature_push_notifications`,
       values,
     );
     ok(res, rows[0]);
@@ -164,6 +198,21 @@ adminRouter.post(
       ],
     );
     created(res, rows[0]);
+  }),
+);
+
+adminRouter.post(
+  '/users/:id/reset-pin',
+  requirePermission(PERMISSIONS.DELETE_USER),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const result = await db.query(
+      `UPDATE users SET pin_hash = NULL, updated_at = NOW() WHERE id = $1`,
+      [req.params.id],
+    );
+    if (result.rowCount === 0) throw AppError.notFound('User');
+    noContent(res);
   }),
 );
 

@@ -18,6 +18,11 @@ import {
   type CapWarning,
 } from './caps.service.js';
 import { evaluateMealBreak, loadMealBreakMinutes, type MealBreakWarning } from './break.service.js';
+import {
+  loadOrgVerificationConfig,
+  loadUserVerificationState,
+  verifyPunchCredentials,
+} from './punch-verify.service.js';
 
 interface TimeEntryRow {
   id: string;
@@ -105,6 +110,7 @@ export async function punchIn(
   db: PoolClient,
   user: AuthenticatedUser,
   input: PunchInRequestInput,
+  context: { clientIp?: string | null } = {},
 ): Promise<PunchInResult> {
   // 1. Idempotency: if this clientGeneratedId has already been processed
   //    for this user, return the existing entry rather than creating a
@@ -145,6 +151,18 @@ export async function punchIn(
       reason: decision.reason,
       distanceMeters: decision.distanceMeters,
       geofenceId: decision.geofence?.id,
+    });
+  }
+
+  // 3.25. Anti-buddy-punching gates (PIN / IP / etc., off by default).
+  const verifyConfig = await loadOrgVerificationConfig(db);
+  if (verifyConfig.enabledMethods.length > 0) {
+    const verifyUser = await loadUserVerificationState(db, user.userId);
+    await verifyPunchCredentials({
+      config: verifyConfig,
+      user: verifyUser,
+      providedPin: input.pin,
+      clientIp: context.clientIp ?? null,
     });
   }
 

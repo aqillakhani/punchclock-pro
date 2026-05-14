@@ -13,10 +13,13 @@
  *   POST /shift-trade/:id/accept       — pick up an open trade
  */
 import { Router } from 'express';
+import bcrypt from 'bcrypt';
 import {
   PERMISSIONS,
+  setPinSchema,
   shiftTradePostSchema,
   timeOffRequestSchema,
+  type SetPinInput,
   type ShiftTradePostInput,
   type TimeOffRequestInput,
 } from '@punchclock/shared';
@@ -24,8 +27,9 @@ import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { created, ok } from '../lib/response.js';
+import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
+import { loadEnv } from '../config/env.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
 
 export const meRouter = Router();
@@ -308,6 +312,38 @@ meRouter.post(
       throw AppError.conflict('Trade was already accepted');
     }
     ok(res, rows[0]);
+  }),
+);
+
+// ---- PIN management --------------------------------------------------
+
+meRouter.get(
+  '/pin-status',
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const { rows } = await db.query<{ pin_hash: string | null }>(
+      `SELECT pin_hash FROM users WHERE id = $1`,
+      [req.user.userId],
+    );
+    ok(res, { hasPin: !!rows[0]?.pin_hash });
+  }),
+);
+
+meRouter.post(
+  '/pin',
+  validateBody(setPinSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const body = req.body as SetPinInput;
+    const env = loadEnv();
+    const hash = await bcrypt.hash(body.pin, env.BCRYPT_ROUNDS);
+    await db.query(`UPDATE users SET pin_hash = $1, updated_at = NOW() WHERE id = $2`, [
+      hash,
+      req.user.userId,
+    ]);
+    noContent(res);
   }),
 );
 

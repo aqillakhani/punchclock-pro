@@ -23,14 +23,36 @@ interface PunchOutResult {
   warnings?: PunchWarning[];
 }
 
+interface OrgVerificationInfo {
+  punch_verification_methods: ('selfie' | 'pin' | 'ip' | 'device')[];
+}
+
+interface PinStatus {
+  hasPin: boolean;
+}
+
 export default function ClockPage() {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<PunchWarning[]>([]);
+  const [pin, setPin] = useState('');
 
   const current = useQuery<CurrentEntry>({
     queryKey: ['time-tracking', 'current'],
     queryFn: () => apiClient.get('/api/v1/time-tracking/current'),
+  });
+
+  const orgVerify = useQuery<OrgVerificationInfo>({
+    queryKey: ['admin', 'organization'],
+    queryFn: () => apiClient.get('/api/v1/admin/organization'),
+    staleTime: 60_000,
+  });
+  const pinEnabled = (orgVerify.data?.punch_verification_methods ?? []).includes('pin');
+
+  const pinStatus = useQuery<PinStatus>({
+    queryKey: ['me', 'pin-status'],
+    queryFn: () => apiClient.get('/api/v1/me/pin-status'),
+    enabled: pinEnabled,
   });
 
   const punchIn = useMutation({
@@ -41,11 +63,13 @@ export default function ClockPage() {
         timestamp: new Date().toISOString(),
         location,
         deviceInfo: { deviceId: 'web', platform: 'web' },
+        ...(pinEnabled && pin ? { pin } : {}),
       });
     },
     onSuccess: (data) => {
       setMessage('Clocked in successfully');
       setWarnings(data?.warnings ?? []);
+      setPin('');
       qc.invalidateQueries({ queryKey: ['time-tracking', 'current'] });
     },
     onError: (e: Error) => {
@@ -75,19 +99,48 @@ export default function ClockPage() {
   });
 
   const isOpen = !!current.data?.entry;
+  const needsToSetPin = pinEnabled && pinStatus.data && !pinStatus.data.hasPin;
 
   return (
     <div className="mx-auto max-w-lg">
       <h1 className="mb-8 text-2xl font-semibold text-slate-900">Clock in / out</h1>
+
+      {needsToSetPin && (
+        <SetPinCard
+          onSet={() => {
+            qc.invalidateQueries({ queryKey: ['me', 'pin-status'] });
+          }}
+        />
+      )}
+
       <div className="rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
         <div className="mb-4 text-sm uppercase text-slate-500">Current status</div>
         <div className="mb-8 text-2xl font-bold">
           {current.isLoading ? '…' : isOpen ? 'Clocked In' : 'Clocked Out'}
         </div>
+
+        {pinEnabled && !needsToSetPin && !isOpen && (
+          <div className="mb-4">
+            <label className="block text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+              PIN
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-center text-lg tracking-widest focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+              placeholder="••••"
+            />
+          </div>
+        )}
+
         <button
           type="button"
           onClick={() => (isOpen ? punchOut.mutate() : punchIn.mutate())}
-          disabled={punchIn.isPending || punchOut.isPending}
+          disabled={punchIn.isPending || punchOut.isPending || (needsToSetPin && !isOpen)}
           className="w-full rounded-md bg-brand-600 px-6 py-4 text-xl font-semibold text-white shadow hover:bg-brand-700 disabled:opacity-60"
         >
           {isOpen ? 'Punch Out' : 'Punch In'}
@@ -107,6 +160,94 @@ export default function ClockPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function SetPinCard({ onSet }: { onSet: () => void }) {
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: (body: { pin: string; confirmPin: string }) =>
+      apiClient.post('/api/v1/me/pin', body),
+    onSuccess: () => {
+      setPin('');
+      setConfirmPin('');
+      setErr(null);
+      onSet();
+    },
+    onError: (e: Error) => setErr(e.message),
+  });
+
+  return (
+    <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm">
+      <h2 className="text-base font-semibold text-amber-900">Set a PIN to punch in</h2>
+      <p className="mt-1 text-amber-800">
+        Your store requires a PIN at the clock. Pick a 4–8 digit code you can remember — you&apos;ll
+        enter it every time you punch.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          setErr(null);
+          if (pin.length < 4) {
+            setErr('PIN must be at least 4 digits.');
+            return;
+          }
+          if (pin !== confirmPin) {
+            setErr('PINs do not match.');
+            return;
+          }
+          mutation.mutate({ pin, confirmPin });
+        }}
+        className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2"
+      >
+        <div>
+          <label className="block text-xs font-medium uppercase tracking-wide text-amber-800">
+            New PIN
+          </label>
+          <input
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            maxLength={8}
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+            className="mt-1 w-full rounded-md border border-amber-300 px-3 py-2 text-center text-lg tracking-widest focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            placeholder="••••"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium uppercase tracking-wide text-amber-800">
+            Confirm
+          </label>
+          <input
+            type="password"
+            inputMode="numeric"
+            autoComplete="new-password"
+            maxLength={8}
+            value={confirmPin}
+            onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+            className="mt-1 w-full rounded-md border border-amber-300 px-3 py-2 text-center text-lg tracking-widest focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            placeholder="••••"
+          />
+        </div>
+        <div className="sm:col-span-2 flex items-center justify-between gap-3">
+          <p className="text-xs text-amber-800">
+            Tip: don&apos;t share your PIN. PIN sharing is the most common way buddy-punching sneaks
+            past these checks.
+          </p>
+          <button
+            type="submit"
+            disabled={mutation.isPending}
+            className="rounded-md bg-amber-700 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800 disabled:opacity-60"
+          >
+            {mutation.isPending ? 'Saving…' : 'Save PIN'}
+          </button>
+        </div>
+        {err && <p className="sm:col-span-2 text-sm text-rose-700">{err}</p>}
+      </form>
     </div>
   );
 }

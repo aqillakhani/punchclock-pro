@@ -19,6 +19,9 @@ export function createApp(): Express {
   const app = express();
 
   app.disable('x-powered-by');
+  // Required so req.ip resolves to the client address when the API
+  // sits behind nginx / ALB / Cloud Run. In dev this is harmless.
+  app.set('trust proxy', true);
   app.use(helmet());
   app.use(cors({ origin: corsOrigins(env), credentials: true }));
   app.use(pinoHttp({ logger }));

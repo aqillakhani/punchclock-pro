@@ -11,7 +11,30 @@ interface OrgInfo {
   timezone: string;
   geofencing_enabled: boolean;
   break_tracking_enabled: boolean;
+  punch_verification_methods: ('selfie' | 'pin' | 'ip' | 'device')[];
+  allowed_punch_cidrs: string[];
 }
+
+type VerificationMethod = 'selfie' | 'pin' | 'ip' | 'device';
+
+const METHOD_LABELS: Record<VerificationMethod, { label: string; hint: string }> = {
+  pin: {
+    label: 'PIN at punch',
+    hint: 'Workers enter a 4–8 digit PIN. Honest note: PIN sharing is the most common buddy-punching vector. Combine with device-pinning for real protection.',
+  },
+  ip: {
+    label: 'Store IP restriction',
+    hint: 'Punches only accepted from the listed CIDRs (typically your store’s public IP). Offshore contractors are auto-exempt.',
+  },
+  selfie: {
+    label: 'Selfie on punch',
+    hint: 'Mobile app prompts the camera at punch. Strongest deterrent — also the most invasive. Off by default.',
+  },
+  device: {
+    label: 'Device pinning',
+    hint: 'Punches only accepted from previously registered devices. Owner is notified of new devices. (Coming in a follow-up.)',
+  },
+};
 
 interface Geofence {
   id: string;
@@ -61,14 +84,41 @@ export default function SettingsPage() {
   const [breakTrackingOn, setBreakTrackingOn] = useState(false);
   const [orgMessage, setOrgMessage] = useState<string | null>(null);
 
+  const [verifyMethods, setVerifyMethods] = useState<Set<VerificationMethod>>(new Set());
+  const [cidrText, setCidrText] = useState('');
+  const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
+
   useEffect(() => {
     if (org.data) {
       setOrgName(org.data.name);
       setTimezone(org.data.timezone);
       setGeofencingOn(org.data.geofencing_enabled);
       setBreakTrackingOn(org.data.break_tracking_enabled);
+      setVerifyMethods(new Set(org.data.punch_verification_methods ?? []));
+      setCidrText((org.data.allowed_punch_cidrs ?? []).join('\n'));
     }
   }, [org.data]);
+
+  const saveVerification = useMutation({
+    mutationFn: (input: { methods: VerificationMethod[]; cidrs: string[] }) =>
+      apiClient.patch('/api/v1/admin/organization', {
+        punchVerificationMethods: input.methods,
+        allowedPunchCidrs: input.cidrs,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organization'] });
+      setVerifyMessage('Saved');
+      setTimeout(() => setVerifyMessage(null), 2000);
+    },
+    onError: (e: Error) => setVerifyMessage(e.message),
+  });
+
+  function toggleMethod(m: VerificationMethod) {
+    const next = new Set(verifyMethods);
+    if (next.has(m)) next.delete(m);
+    else next.add(m);
+    setVerifyMethods(next);
+  }
 
   const saveOrg = useMutation({
     mutationFn: (patch: Partial<OrgInfo>) =>
@@ -192,6 +242,69 @@ export default function SettingsPage() {
             {orgMessage && <span className="text-sm text-emerald-600">{orgMessage}</span>}
             <button type="submit" disabled={saveOrg.isPending} className={btnPrimary}>
               {saveOrg.isPending ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </Section>
+
+      <Section
+        title="Punch verification"
+        subtitle="Anti-buddy-punching methods. All off by default — pick any combination."
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const cidrs = cidrText
+              .split(/[\n,]/)
+              .map((s) => s.trim())
+              .filter(Boolean);
+            saveVerification.mutate({
+              methods: Array.from(verifyMethods),
+              cidrs,
+            });
+          }}
+          className="space-y-4"
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {(Object.keys(METHOD_LABELS) as VerificationMethod[]).map((m) => (
+              <Toggle
+                key={m}
+                checked={verifyMethods.has(m)}
+                onChange={() => toggleMethod(m)}
+                label={METHOD_LABELS[m].label}
+                hint={METHOD_LABELS[m].hint}
+              />
+            ))}
+          </div>
+
+          {verifyMethods.has('ip') && (
+            <Field label="Allowed IP ranges (CIDR, one per line)">
+              <textarea
+                value={cidrText}
+                onChange={(e) => setCidrText(e.target.value)}
+                rows={3}
+                className={`${inputClass} font-mono text-xs`}
+                placeholder={'73.42.18.0/24\n10.0.0.0/8'}
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                Find your store&apos;s public IP at{' '}
+                <a
+                  href="https://www.whatismyip.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand-700 hover:underline"
+                >
+                  whatismyip.com
+                </a>{' '}
+                from a register or back-office machine.
+              </span>
+            </Field>
+          )}
+
+          <div className="flex items-center justify-end gap-3">
+            {verifyMessage && <span className="text-sm text-emerald-600">{verifyMessage}</span>}
+            <button type="submit" disabled={saveVerification.isPending} className={btnPrimary}>
+              {saveVerification.isPending ? 'Saving…' : 'Save verification'}
             </button>
           </div>
         </form>
