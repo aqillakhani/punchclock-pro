@@ -81,6 +81,19 @@ export class AppError extends Error {
     );
   }
 
+  static predictiveLock(details: {
+    scheduledDate: string;
+    noticeDays: number;
+    windowDays: number;
+  }): AppError {
+    return new AppError(
+      'PREDICTIVE_LOCK',
+      `Predictive scheduling requires ${details.windowDays} days notice (this change is ${details.noticeDays} days out). Add ?force=true to override and audit.`,
+      HTTP_STATUS.CONFLICT,
+      details,
+    );
+  }
+
   static capExceeded(details: {
     scope: 'daily' | 'weekly';
     cap: number;

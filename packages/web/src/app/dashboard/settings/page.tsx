@@ -13,6 +13,8 @@ interface OrgInfo {
   break_tracking_enabled: boolean;
   punch_verification_methods: ('selfie' | 'pin' | 'ip' | 'device')[];
   allowed_punch_cidrs: string[];
+  feature_predictive_scheduling: boolean;
+  weekly_labor_budget: string | null;
 }
 
 type VerificationMethod = 'selfie' | 'pin' | 'ip' | 'device';
@@ -88,6 +90,10 @@ export default function SettingsPage() {
   const [cidrText, setCidrText] = useState('');
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null);
 
+  const [predictiveOn, setPredictiveOn] = useState(false);
+  const [weeklyBudget, setWeeklyBudget] = useState('');
+  const [complianceMessage, setComplianceMessage] = useState<string | null>(null);
+
   useEffect(() => {
     if (org.data) {
       setOrgName(org.data.name);
@@ -96,8 +102,25 @@ export default function SettingsPage() {
       setBreakTrackingOn(org.data.break_tracking_enabled);
       setVerifyMethods(new Set(org.data.punch_verification_methods ?? []));
       setCidrText((org.data.allowed_punch_cidrs ?? []).join('\n'));
+      setPredictiveOn(!!org.data.feature_predictive_scheduling);
+      setWeeklyBudget(org.data.weekly_labor_budget ?? '');
     }
   }, [org.data]);
+
+  const saveCompliance = useMutation({
+    mutationFn: (input: { predictiveOn: boolean; weeklyBudget: number | null }) =>
+      apiClient.patch('/api/v1/admin/organization', {
+        featurePredictiveScheduling: input.predictiveOn,
+        weeklyLaborBudget: input.weeklyBudget,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organization'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'cost-of-labor'] });
+      setComplianceMessage('Saved');
+      setTimeout(() => setComplianceMessage(null), 2000);
+    },
+    onError: (e: Error) => setComplianceMessage(e.message),
+  });
 
   const saveVerification = useMutation({
     mutationFn: (input: { methods: VerificationMethod[]; cidrs: string[] }) =>
@@ -242,6 +265,53 @@ export default function SettingsPage() {
             {orgMessage && <span className="text-sm text-emerald-600">{orgMessage}</span>}
             <button type="submit" disabled={saveOrg.isPending} className={btnPrimary}>
               {saveOrg.isPending ? 'Saving…' : 'Save changes'}
+            </button>
+          </div>
+        </form>
+      </Section>
+
+      <Section
+        title="Compliance + budget"
+        subtitle="Predictive scheduling lock + weekly labor budget for the Overview card."
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const budget = weeklyBudget.trim() === '' ? null : Number(weeklyBudget);
+            if (budget !== null && (!Number.isFinite(budget) || budget < 0)) {
+              setComplianceMessage('Weekly budget must be a non-negative number.');
+              return;
+            }
+            saveCompliance.mutate({ predictiveOn, weeklyBudget: budget });
+          }}
+          className="space-y-4"
+        >
+          <Toggle
+            checked={predictiveOn}
+            onChange={setPredictiveOn}
+            label="Predictive scheduling — 14-day notice"
+            hint="Required for retailers in Oregon, San Francisco, Berkeley, LA, NYC, Philadelphia, Chicago, Seattle. When on, schedule changes ≤ 14 days out are blocked unless a manager force-overrides (audit-logged)."
+          />
+          <Field label="Weekly labor budget (USD)">
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              value={weeklyBudget}
+              onChange={(e) => setWeeklyBudget(e.target.value)}
+              className={inputClass}
+              placeholder="6500"
+            />
+            <span className="mt-1 block text-xs text-slate-500">
+              Drives the Overview Labor Cost card. Leave blank to hide the budget line.
+            </span>
+          </Field>
+          <div className="flex items-center justify-end gap-3">
+            {complianceMessage && (
+              <span className="text-sm text-emerald-600">{complianceMessage}</span>
+            )}
+            <button type="submit" disabled={saveCompliance.isPending} className={btnPrimary}>
+              {saveCompliance.isPending ? 'Saving…' : 'Save'}
             </button>
           </div>
         </form>
