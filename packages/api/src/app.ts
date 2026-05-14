@@ -11,6 +11,7 @@ import { timeTrackingRouter } from './routes/time-tracking.js';
 import { geofenceRouter } from './routes/geofence.js';
 import { schedulingRouter } from './routes/scheduling.js';
 import { adminRouter } from './routes/admin.js';
+import { meRouter } from './routes/me.js';
 import { syncRouter } from './routes/sync.js';
 
 export function createApp(): Express {
@@ -29,6 +30,7 @@ export function createApp(): Express {
   app.use('/api/v1/geofence/locations', geofenceRouter);
   app.use('/api/v1/scheduling', schedulingRouter);
   app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1/me', meRouter);
   app.use('/api/v1/sync', syncRouter);
 
   app.use(notFoundHandler());

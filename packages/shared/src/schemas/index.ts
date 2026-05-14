@@ -138,6 +138,39 @@ export const organizationUpdateSchema = z.object({
   breakTrackingEnabled: z.boolean().optional(),
 });
 
+// ---- Time-off + shift trades (v2 self-service) ----
+
+const ymdRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+export const timeOffRequestSchema = z
+  .object({
+    startDate: z.string().regex(ymdRegex, 'startDate must be YYYY-MM-DD'),
+    endDate: z.string().regex(ymdRegex, 'endDate must be YYYY-MM-DD'),
+    reason: z.string().max(512).optional(),
+  })
+  .refine((v) => v.endDate >= v.startDate, {
+    message: 'endDate must be on or after startDate',
+    path: ['endDate'],
+  });
+
+export const timeOffDecisionSchema = z.object({
+  decision: z.enum(['approved', 'rejected']),
+  comment: z.string().max(512).optional(),
+});
+
+export const shiftTradePostSchema = z.object({
+  shiftId: uuidSchema,
+});
+
+export const shiftTradeDecisionSchema = z.object({
+  decision: z.enum(['approved', 'rejected']),
+});
+
+export type TimeOffRequestInput = z.infer<typeof timeOffRequestSchema>;
+export type TimeOffDecisionInput = z.infer<typeof timeOffDecisionSchema>;
+export type ShiftTradePostInput = z.infer<typeof shiftTradePostSchema>;
+export type ShiftTradeDecisionInput = z.infer<typeof shiftTradeDecisionSchema>;
+
 export const syncBatchRequestSchema = z.object({
   deviceId: z.string().min(1),
   appVersion: z.string().optional(),

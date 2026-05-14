@@ -1,5 +1,11 @@
 import { describe, it, expect } from '@jest/globals';
-import { punchInRequestSchema, syncBatchRequestSchema } from '@punchclock/shared';
+import {
+  punchInRequestSchema,
+  shiftTradePostSchema,
+  syncBatchRequestSchema,
+  timeOffDecisionSchema,
+  timeOffRequestSchema,
+} from '@punchclock/shared';
 
 describe('punchInRequestSchema', () => {
   it('accepts a minimal valid request', () => {
@@ -78,5 +84,68 @@ describe('syncBatchRequestSchema', () => {
       events,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('timeOffRequestSchema', () => {
+  it('accepts a same-day request', () => {
+    const p = timeOffRequestSchema.parse({
+      startDate: '2026-06-01',
+      endDate: '2026-06-01',
+      reason: 'doc appt',
+    });
+    expect(p.startDate).toBe('2026-06-01');
+  });
+
+  it('accepts a multi-day range with no reason', () => {
+    const r = timeOffRequestSchema.safeParse({ startDate: '2026-06-01', endDate: '2026-06-05' });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects endDate before startDate', () => {
+    const r = timeOffRequestSchema.safeParse({ startDate: '2026-06-05', endDate: '2026-06-01' });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects malformed dates', () => {
+    const r = timeOffRequestSchema.safeParse({ startDate: 'tomorrow', endDate: '2026-06-01' });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects an overlong reason', () => {
+    const r = timeOffRequestSchema.safeParse({
+      startDate: '2026-06-01',
+      endDate: '2026-06-01',
+      reason: 'x'.repeat(513),
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe('timeOffDecisionSchema', () => {
+  it('accepts approved with a comment', () => {
+    const p = timeOffDecisionSchema.parse({ decision: 'approved', comment: 'enjoy!' });
+    expect(p.decision).toBe('approved');
+  });
+
+  it('accepts rejected without a comment', () => {
+    expect(timeOffDecisionSchema.safeParse({ decision: 'rejected' }).success).toBe(true);
+  });
+
+  it('rejects unknown decisions', () => {
+    expect(timeOffDecisionSchema.safeParse({ decision: 'maybe' }).success).toBe(false);
+  });
+});
+
+describe('shiftTradePostSchema', () => {
+  it('accepts a uuid shiftId', () => {
+    const r = shiftTradePostSchema.safeParse({
+      shiftId: '550e8400-e29b-41d4-a716-446655440000',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects a non-uuid shiftId', () => {
+    expect(shiftTradePostSchema.safeParse({ shiftId: 'not-a-uuid' }).success).toBe(false);
   });
 });
