@@ -1,6 +1,12 @@
 import type { RequestHandler } from 'express';
 import jwt from 'jsonwebtoken';
-import { ROLE_HIERARCHY, type AuthenticatedUser, type Role } from '@punchclock/shared';
+import {
+  ROLE_HIERARCHY,
+  can,
+  type Action,
+  type AuthenticatedUser,
+  type Role,
+} from '@punchclock/shared';
 import { AppError } from '../lib/errors.js';
 import { loadEnv } from '../config/env.js';
 
@@ -64,6 +70,10 @@ export function requireAuth(): RequestHandler {
 /**
  * Require the authenticated user to have at least the given role.
  * Roles are hierarchical (owner > manager > employee > viewer).
+ *
+ * Prefer {@link requirePermission} for new routes — it consults the
+ * shared RBAC matrix instead of relying on hierarchy alone, so
+ * special-case grants (e.g. viewer can `view:reports`) work correctly.
  */
 export function requireRole(min: Role): RequestHandler {
   const minLevel = ROLE_HIERARCHY[min];
@@ -71,6 +81,25 @@ export function requireRole(min: Role): RequestHandler {
     if (!req.user) throw AppError.unauthorized();
     if (ROLE_HIERARCHY[req.user.role] < minLevel) {
       throw AppError.forbidden(`Requires role >= ${min}`);
+    }
+    next();
+  };
+}
+
+/**
+ * Require the authenticated user's role to be granted the given
+ * action by the shared permissions matrix
+ * (`@punchclock/shared/permissions`).
+ *
+ * This supersedes {@link requireRole} for routes whose access pattern
+ * is not strictly hierarchical — for example, viewers can read
+ * timesheets even though `viewer < employee` in the hierarchy.
+ */
+export function requirePermission(action: Action): RequestHandler {
+  return (req, _res, next) => {
+    if (!req.user) throw AppError.unauthorized();
+    if (!can(req.user.role, action)) {
+      throw AppError.forbidden(`Missing permission: ${action}`);
     }
     next();
   };

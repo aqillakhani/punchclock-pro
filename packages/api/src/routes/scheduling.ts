@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { ROLES, shiftCreateSchema } from '@punchclock/shared';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { PERMISSIONS, shiftCreateSchema } from '@punchclock/shared';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -63,7 +63,7 @@ schedulingRouter.get(
 
 schedulingRouter.post(
   '/shifts',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.EDIT_SCHEDULE),
   validateBody(shiftCreateSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -94,7 +94,7 @@ schedulingRouter.post(
 
 schedulingRouter.delete(
   '/shifts/:id',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.EDIT_SCHEDULE),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();

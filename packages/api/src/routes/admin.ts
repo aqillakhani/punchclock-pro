@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
-import { ROLES, inviteUserSchema, organizationUpdateSchema } from '@punchclock/shared';
+import { PERMISSIONS, ROLES, inviteUserSchema, organizationUpdateSchema } from '@punchclock/shared';
 import { loadEnv } from '../config/env.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -30,7 +30,7 @@ adminRouter.get(
 
 adminRouter.patch(
   '/organization',
-  requireRole(ROLES.OWNER),
+  requirePermission(PERMISSIONS.EDIT_SETTINGS),
   validateBody(organizationUpdateSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -63,7 +63,7 @@ adminRouter.patch(
 
 adminRouter.get(
   '/users',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.VIEW_TEAM),
   asyncHandler(async (_req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();
@@ -124,11 +124,18 @@ adminRouter.get(
 
 adminRouter.post(
   '/users',
-  requireRole(ROLES.OWNER),
+  requirePermission(PERMISSIONS.INVITE_USER),
   validateBody(inviteUserSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
+
+    // Managers may only invite employees (design §5: "Team — Manager:
+    // ✓ full read; add but only `employee` role"). Owner may invite
+    // any role.
+    if (req.user.role === ROLES.MANAGER && req.body.role !== ROLES.EMPLOYEE) {
+      throw AppError.forbidden('Managers may only invite users with role=employee');
+    }
 
     const env = loadEnv();
     const passwordHash = await bcrypt.hash(req.body.password, env.BCRYPT_ROUNDS);
@@ -154,7 +161,7 @@ adminRouter.post(
 
 adminRouter.delete(
   '/users/:id',
-  requireRole(ROLES.OWNER),
+  requirePermission(PERMISSIONS.DELETE_USER),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();
@@ -169,7 +176,7 @@ adminRouter.delete(
 
 adminRouter.get(
   '/timesheets',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.VIEW_TIMESHEETS),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();

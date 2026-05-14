@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { ROLES, geofenceCreateSchema } from '@punchclock/shared';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { PERMISSIONS, geofenceCreateSchema } from '@punchclock/shared';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -26,7 +26,7 @@ geofenceRouter.get(
 
 geofenceRouter.post(
   '/',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.EDIT_GEOFENCE),
   validateBody(geofenceCreateSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -52,7 +52,7 @@ geofenceRouter.post(
 
 geofenceRouter.patch(
   '/:id',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.EDIT_GEOFENCE),
   validateBody(geofenceCreateSchema.partial()),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -88,7 +88,7 @@ geofenceRouter.patch(
 
 geofenceRouter.delete(
   '/:id',
-  requireRole(ROLES.MANAGER),
+  requirePermission(PERMISSIONS.EDIT_GEOFENCE),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();
