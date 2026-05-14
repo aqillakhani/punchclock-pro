@@ -9,7 +9,7 @@ import {
   timeOffDecisionSchema,
 } from '@punchclock/shared';
 import { loadEnv } from '../config/env.js';
-import { requireAuth, requirePermission } from '../middleware/auth.js';
+import { requireAuth, requirePermission, requireRole } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -17,6 +17,12 @@ import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
 import { enumerateDates, materializeTimeOffShifts } from '../services/time-off.service.js';
+import {
+  buildIIF,
+  buildQboJson,
+  loadWorkersForPeriod,
+  resolveAccounts,
+} from '../services/payroll-export.service.js';
 
 export const adminRouter = Router();
 
@@ -496,6 +502,125 @@ adminRouter.post(
     }
 
     ok(res, updated[0]);
+  }),
+);
+
+// ---- Payroll export (IIF + QBO JSON) -------------------------------
+
+function parseDateRange(req: import('express').Request): { fromDate: string; toDate: string } {
+  const from = typeof req.query.from === 'string' ? req.query.from : null;
+  const to = typeof req.query.to === 'string' ? req.query.to : null;
+  if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw AppError.validation('from and to must be YYYY-MM-DD');
+  }
+  if (to < from) throw AppError.validation('to must be on or after from');
+  return { fromDate: from, toDate: to };
+}
+
+async function loadOrgForExport(
+  db: import('pg').PoolClient,
+): Promise<{ timezone: string; accounts: ReturnType<typeof resolveAccounts> }> {
+  const { rows } = await db.query<{ timezone: string; qb_chart_of_accounts: unknown }>(
+    `SELECT timezone, qb_chart_of_accounts FROM organizations LIMIT 1`,
+  );
+  const row = rows[0];
+  if (!row) throw AppError.notFound('Organization');
+  const accounts = resolveAccounts(
+    typeof row.qb_chart_of_accounts === 'object' && row.qb_chart_of_accounts !== null
+      ? (row.qb_chart_of_accounts as Partial<ReturnType<typeof resolveAccounts>>)
+      : null,
+  );
+  return { timezone: row.timezone ?? 'UTC', accounts };
+}
+
+adminRouter.get(
+  '/exports/payroll.iif',
+  requirePermission(PERMISSIONS.EXPORT_PAYROLL),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const period = parseDateRange(req);
+    const jurisdiction: OvertimeJurisdiction =
+      req.query.jurisdiction === 'california' ? 'california' : 'federal';
+    const { timezone, accounts } = await loadOrgForExport(db);
+    const workers = await loadWorkersForPeriod(db, { period, jurisdiction, orgTimezone: timezone });
+    const iif = buildIIF({ workers, period, accounts });
+    const filename = `payroll-${period.fromDate}-to-${period.toDate}.iif`;
+    res.setHeader('Content-Type', 'application/vnd.intu.iif; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(iif);
+  }),
+);
+
+adminRouter.get(
+  '/exports/payroll.qbo.json',
+  requirePermission(PERMISSIONS.EXPORT_PAYROLL),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const period = parseDateRange(req);
+    const jurisdiction: OvertimeJurisdiction =
+      req.query.jurisdiction === 'california' ? 'california' : 'federal';
+    const { timezone, accounts } = await loadOrgForExport(db);
+    const workers = await loadWorkersForPeriod(db, { period, jurisdiction, orgTimezone: timezone });
+    const payload = buildQboJson({ workers, period, accounts });
+    const filename = `payroll-${period.fromDate}-to-${period.toDate}.qbo.json`;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  }),
+);
+
+// ---- Cost-of-labor (Overview widget data) --------------------------
+
+adminRouter.get(
+  '/cost-of-labor',
+  requireRole(ROLES.MANAGER),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const period = parseDateRange(req);
+    const jurisdiction: OvertimeJurisdiction =
+      req.query.jurisdiction === 'california' ? 'california' : 'federal';
+    const { timezone } = await loadOrgForExport(db);
+
+    // Actual = sum of estimated pay across active users for the period.
+    const workers = await loadWorkersForPeriod(db, { period, jurisdiction, orgTimezone: timezone });
+    const actual = workers.reduce((s, w) => s + w.grossPay, 0);
+
+    // Scheduled = SUM(shifts.duration_minutes / 60 * users.pay_rate)
+    // for non-time_off, non-cancelled shifts in the date range.
+    const { rows: schedRows } = await db.query<{ scheduled_pay: string }>(
+      `SELECT COALESCE(SUM((s.duration_minutes / 60.0) * COALESCE(u.pay_rate, 0)), 0)::text
+                AS scheduled_pay
+       FROM shifts s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.scheduled_date BETWEEN $1::date AND $2::date
+         AND s.status <> 'cancelled'
+         AND s.shift_type <> 'time_off'`,
+      [period.fromDate, period.toDate],
+    );
+    const scheduled = Number(schedRows[0]?.scheduled_pay ?? 0);
+
+    // Budget = weekly_labor_budget × weeks-in-range (rounded up).
+    const { rows: orgRows } = await db.query<{ weekly_labor_budget: string | null }>(
+      `SELECT weekly_labor_budget FROM organizations LIMIT 1`,
+    );
+    const weeklyBudget = orgRows[0]?.weekly_labor_budget
+      ? Number(orgRows[0].weekly_labor_budget)
+      : null;
+    const days = enumerateDates(period.fromDate, period.toDate).length;
+    const weeks = Math.max(1, Math.ceil(days / 7));
+    const budget = weeklyBudget !== null ? Number((weeklyBudget * weeks).toFixed(2)) : null;
+
+    ok(res, {
+      period,
+      scheduled: Number(scheduled.toFixed(2)),
+      actual: Number(actual.toFixed(2)),
+      budget,
+      weeks,
+      overBudget: budget !== null && actual > budget,
+    });
   }),
 );
 
