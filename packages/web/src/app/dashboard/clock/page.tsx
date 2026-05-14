@@ -25,10 +25,16 @@ interface PunchOutResult {
 
 interface OrgVerificationInfo {
   punch_verification_methods: ('selfie' | 'pin' | 'ip' | 'device')[];
+  feature_cash_drawer: boolean;
 }
 
 interface PinStatus {
   hasPin: boolean;
+}
+
+interface MeInfo {
+  id: string;
+  worksite: 'onshore' | 'offshore';
 }
 
 export default function ClockPage() {
@@ -36,10 +42,17 @@ export default function ClockPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<PunchWarning[]>([]);
   const [pin, setPin] = useState('');
+  const [drawerCount, setDrawerCount] = useState('');
 
   const current = useQuery<CurrentEntry>({
     queryKey: ['time-tracking', 'current'],
     queryFn: () => apiClient.get('/api/v1/time-tracking/current'),
+  });
+
+  const me = useQuery<MeInfo>({
+    queryKey: ['auth', 'me'],
+    queryFn: () => apiClient.get('/auth/me'),
+    staleTime: 5 * 60 * 1000,
   });
 
   const orgVerify = useQuery<OrgVerificationInfo>({
@@ -48,12 +61,29 @@ export default function ClockPage() {
     staleTime: 60_000,
   });
   const pinEnabled = (orgVerify.data?.punch_verification_methods ?? []).includes('pin');
+  const cashDrawerEnabled =
+    !!orgVerify.data?.feature_cash_drawer && me.data?.worksite === 'onshore';
 
   const pinStatus = useQuery<PinStatus>({
     queryKey: ['me', 'pin-status'],
     queryFn: () => apiClient.get('/api/v1/me/pin-status'),
     enabled: pinEnabled,
   });
+
+  async function recordCashDrawer(timeEntryId: string, countType: 'start' | 'end') {
+    if (!cashDrawerEnabled || !drawerCount.trim()) return;
+    const dollars = Number(drawerCount.replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(dollars) || dollars < 0) return;
+    try {
+      await apiClient.post('/api/v1/me/cash-drawer', {
+        timeEntryId,
+        countType,
+        countedCents: Math.round(dollars * 100),
+      });
+    } catch {
+      // Soft-fail — drawer count is auxiliary; don't block the punch UX.
+    }
+  }
 
   const punchIn = useMutation({
     mutationFn: async () => {
@@ -66,10 +96,12 @@ export default function ClockPage() {
         ...(pinEnabled && pin ? { pin } : {}),
       });
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setMessage('Clocked in successfully');
       setWarnings(data?.warnings ?? []);
       setPin('');
+      if (data?.timeEntry?.id) await recordCashDrawer(data.timeEntry.id, 'start');
+      setDrawerCount('');
       qc.invalidateQueries({ queryKey: ['time-tracking', 'current'] });
     },
     onError: (e: Error) => {
@@ -87,9 +119,11 @@ export default function ClockPage() {
         location,
       });
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setMessage('Clocked out successfully');
       setWarnings(data?.warnings ?? []);
+      if (data?.timeEntry?.id) await recordCashDrawer(data.timeEntry.id, 'end');
+      setDrawerCount('');
       qc.invalidateQueries({ queryKey: ['time-tracking', 'current'] });
     },
     onError: (e: Error) => {
@@ -134,6 +168,27 @@ export default function ClockPage() {
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-center text-lg tracking-widest focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
               placeholder="••••"
             />
+          </div>
+        )}
+
+        {cashDrawerEnabled && (
+          <div className="mb-4">
+            <label className="block text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+              {isOpen ? 'Ending drawer count' : 'Starting drawer count'} ($)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min={0}
+              inputMode="decimal"
+              value={drawerCount}
+              onChange={(e) => setDrawerCount(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-center text-lg tabular-nums focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+              placeholder="0.00"
+            />
+            <p className="mt-1 text-left text-xs text-slate-500">
+              Optional. Variance over $5 will be flagged for the manager on the Timesheets review.
+            </p>
           </div>
         )}
 

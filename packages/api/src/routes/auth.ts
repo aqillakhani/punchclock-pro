@@ -128,7 +128,9 @@ authRouter.get(
     if (!db || !req.user) throw AppError.unauthorized();
     const { rows } = await db.query(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.pay_rate,
-              o.id AS organization_id, o.name AS organization_name
+              u.worker_type, u.worksite, u.pay_currency, u.job_title,
+              o.id AS organization_id, o.name AS organization_name, o.timezone,
+              o.fx_rates
        FROM users u JOIN organizations o ON o.id = u.organization_id
        WHERE u.id = $1`,
       [req.user.userId],

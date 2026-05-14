@@ -54,6 +54,12 @@ const NAV: NavItem[] = [
     requires: PERMISSIONS.VIEW_TIME_OFF,
   },
   { href: '/dashboard/trades', label: 'Trades', icon: '⇄', requires: PERMISSIONS.VIEW_TRADES },
+  {
+    href: '/dashboard/documents',
+    label: 'Documents',
+    icon: '📄',
+    requires: PERMISSIONS.VIEW_DOCUMENTS_OWN,
+  },
   { href: '/dashboard/team', label: 'Team', icon: '◉', requires: PERMISSIONS.VIEW_TEAM },
   {
     href: '/dashboard/schedule',

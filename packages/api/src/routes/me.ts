@@ -16,9 +16,13 @@ import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import {
   PERMISSIONS,
+  cashDrawerCountSchema,
+  documentUploadSchema,
   setPinSchema,
   shiftTradePostSchema,
   timeOffRequestSchema,
+  type CashDrawerCountInput,
+  type DocumentUploadInput,
   type SetPinInput,
   type ShiftTradePostInput,
   type TimeOffRequestInput,
@@ -344,6 +348,91 @@ meRouter.post(
       req.user.userId,
     ]);
     noContent(res);
+  }),
+);
+
+// ---- Cash drawer counts (D1) ----------------------------------------
+
+meRouter.post(
+  '/cash-drawer',
+  validateBody(cashDrawerCountSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const body = req.body as CashDrawerCountInput;
+    const { rows: orgRows } = await db.query<{ feature_cash_drawer: boolean }>(
+      `SELECT feature_cash_drawer FROM organizations LIMIT 1`,
+    );
+    if (!orgRows[0]?.feature_cash_drawer) {
+      throw AppError.forbidden('Cash drawer counts are not enabled for this org');
+    }
+    const { rows } = await db.query(
+      `INSERT INTO cash_drawer_counts
+         (organization_id, user_id, time_entry_id, count_type,
+          expected_cents, counted_cents, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, time_entry_id, count_type, expected_cents,
+                 counted_cents, variance_cents, notes, created_at`,
+      [
+        req.user.organizationId,
+        req.user.userId,
+        body.timeEntryId ?? null,
+        body.countType,
+        body.expectedCents ?? null,
+        body.countedCents,
+        body.notes ?? null,
+      ],
+    );
+    created(res, rows[0]);
+  }),
+);
+
+// ---- Employee documents (D2) ----------------------------------------
+
+meRouter.get(
+  '/documents',
+  requirePermission(PERMISSIONS.VIEW_DOCUMENTS_OWN),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const { rows } = await db.query(
+      `SELECT id, document_type, storage_url,
+              to_char(expires_at, 'YYYY-MM-DD') AS expires_at,
+              verified_at, verified_by, uploaded_at
+       FROM employee_documents
+       WHERE user_id = $1
+       ORDER BY uploaded_at DESC
+       LIMIT 100`,
+      [req.user.userId],
+    );
+    ok(res, rows);
+  }),
+);
+
+meRouter.post(
+  '/documents',
+  requirePermission(PERMISSIONS.UPLOAD_DOCUMENTS_OWN),
+  validateBody(documentUploadSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const body = req.body as DocumentUploadInput;
+    const { rows } = await db.query(
+      `INSERT INTO employee_documents
+         (organization_id, user_id, document_type, storage_url, expires_at)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, document_type, storage_url,
+                 to_char(expires_at, 'YYYY-MM-DD') AS expires_at,
+                 uploaded_at`,
+      [
+        req.user.organizationId,
+        req.user.userId,
+        body.documentType,
+        body.storageUrl ?? null,
+        body.expiresAt ?? null,
+      ],
+    );
+    created(res, rows[0]);
   }),
 );
 

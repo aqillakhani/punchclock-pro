@@ -505,6 +505,92 @@ adminRouter.post(
   }),
 );
 
+// ---- Documents (manager+) ------------------------------------------
+
+adminRouter.get(
+  '/documents',
+  requirePermission(PERMISSIONS.VIEW_DOCUMENTS_OTHERS),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const expiringWithin = req.query.expiringWithinDays
+      ? Number(req.query.expiringWithinDays)
+      : null;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (expiringWithin !== null && Number.isFinite(expiringWithin)) {
+      params.push(expiringWithin);
+      conditions.push(
+        `d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + ($${params.length} || ' days')::interval`,
+      );
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await db.query(
+      `SELECT d.id, d.user_id, d.document_type, d.storage_url,
+              to_char(d.expires_at, 'YYYY-MM-DD') AS expires_at,
+              d.verified_at, d.verified_by, d.uploaded_at,
+              u.email, u.first_name, u.last_name
+       FROM employee_documents d
+       JOIN users u ON u.id = d.user_id
+       ${where}
+       ORDER BY (d.expires_at IS NOT NULL) DESC, d.expires_at ASC, d.uploaded_at DESC
+       LIMIT 500`,
+      params,
+    );
+    ok(res, rows);
+  }),
+);
+
+adminRouter.post(
+  '/documents/:id/verify',
+  requirePermission(PERMISSIONS.VIEW_DOCUMENTS_OTHERS),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const { rows } = await db.query(
+      `UPDATE employee_documents
+       SET verified_at = NOW(), verified_by = $1
+       WHERE id = $2
+       RETURNING id, verified_at, verified_by`,
+      [req.user.userId, req.params.id],
+    );
+    if (rows.length === 0) throw AppError.notFound('Document');
+    ok(res, rows[0]);
+  }),
+);
+
+// ---- Cash drawer review (manager+) ---------------------------------
+
+adminRouter.get(
+  '/cash-drawer',
+  requireRole(ROLES.MANAGER),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const minVarianceCents = req.query.minVarianceCents ? Number(req.query.minVarianceCents) : null;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (minVarianceCents !== null && Number.isFinite(minVarianceCents)) {
+      params.push(minVarianceCents);
+      conditions.push(`ABS(c.variance_cents) >= $${params.length}`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await db.query(
+      `SELECT c.id, c.user_id, c.time_entry_id, c.count_type,
+              c.expected_cents, c.counted_cents, c.variance_cents,
+              c.notes, c.created_at,
+              u.email, u.first_name, u.last_name
+       FROM cash_drawer_counts c
+       JOIN users u ON u.id = c.user_id
+       ${where}
+       ORDER BY c.created_at DESC
+       LIMIT 200`,
+      params,
+    );
+    ok(res, rows);
+  }),
+);
+
 // ---- Audit log viewer (owner-only) ---------------------------------
 
 adminRouter.get(

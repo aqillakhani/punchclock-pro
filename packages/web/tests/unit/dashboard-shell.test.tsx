@@ -24,10 +24,11 @@ describe('DashboardShell sidebar gating', () => {
       'My Schedule',
       'Time off',
       'Trades',
+      'Documents',
     ]);
   });
 
-  it('shows the manager superset (no Settings, no Audit log)', () => {
+  it('shows the manager superset (no Settings, no Audit log, no Preview as)', () => {
     const labels = labelsFor('manager');
     // Manager-only superset of employee + team-management surfaces.
     expect(labels).toContain('Overview');
@@ -36,6 +37,7 @@ describe('DashboardShell sidebar gating', () => {
     expect(labels).toContain('My Schedule');
     expect(labels).toContain('Time off');
     expect(labels).toContain('Trades');
+    expect(labels).toContain('Documents');
     expect(labels).toContain('Team');
     expect(labels).toContain('Schedule');
     expect(labels).toContain('Timesheets');
@@ -43,6 +45,7 @@ describe('DashboardShell sidebar gating', () => {
     // Owner-only.
     expect(labels).not.toContain('Settings');
     expect(labels).not.toContain('Audit log');
+    expect(labels).not.toContain('Preview as…');
   });
 
   it('shows everything for the owner including Settings, Audit log, and Preview as…', () => {
@@ -54,6 +57,7 @@ describe('DashboardShell sidebar gating', () => {
       'My Schedule',
       'Time off',
       'Trades',
+      'Documents',
       'Team',
       'Schedule',
       'Timesheets',

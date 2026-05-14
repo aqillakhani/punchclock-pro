@@ -218,6 +218,38 @@ export const shiftTradeDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
 });
 
+// ---- Cash drawer + documents (Phase D) ----
+
+export const cashDrawerCountSchema = z.object({
+  timeEntryId: uuidSchema.optional(),
+  countType: z.enum(['start', 'end']),
+  countedCents: z.number().int().nonnegative(),
+  expectedCents: z.number().int().nonnegative().optional(),
+  notes: z.string().max(512).optional(),
+});
+
+export type CashDrawerCountInput = z.infer<typeof cashDrawerCountSchema>;
+
+export const documentTypeSchema = z.enum([
+  'i9',
+  'w4',
+  'driver_license',
+  'food_handler',
+  'liquor_license',
+  'other',
+]);
+
+export const documentUploadSchema = z.object({
+  documentType: documentTypeSchema,
+  storageUrl: z.string().url().optional(),
+  expiresAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'expiresAt must be YYYY-MM-DD')
+    .optional(),
+});
+
+export type DocumentUploadInput = z.infer<typeof documentUploadSchema>;
+
 export type TimeOffRequestInput = z.infer<typeof timeOffRequestSchema>;
 export type TimeOffDecisionInput = z.infer<typeof timeOffDecisionSchema>;
 export type ShiftTradePostInput = z.infer<typeof shiftTradePostSchema>;
