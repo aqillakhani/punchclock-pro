@@ -42,8 +42,8 @@ timeTrackingRouter.post(
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
-    const entry = await punchOut(db, req.user, req.body);
-    ok(res, entry);
+    const result = await punchOut(db, req.user, req.body);
+    ok(res, result);
   }),
 );
 

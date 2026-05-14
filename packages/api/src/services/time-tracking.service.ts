@@ -17,6 +17,7 @@ import {
   loadUserCapContext,
   type CapWarning,
 } from './caps.service.js';
+import { evaluateMealBreak, loadMealBreakMinutes, type MealBreakWarning } from './break.service.js';
 
 interface TimeEntryRow {
   id: string;
@@ -223,11 +224,16 @@ export async function punchIn(
   };
 }
 
+export interface PunchOutResult {
+  timeEntry: TimeEntry;
+  warnings?: MealBreakWarning[];
+}
+
 export async function punchOut(
   db: PoolClient,
   user: AuthenticatedUser,
   input: PunchOutRequestInput,
-): Promise<TimeEntry> {
+): Promise<PunchOutResult> {
   // Idempotency: replay returns the existing entry.
   const existingEvent = await db.query<{ time_entry_id: string | null }>(
     `SELECT time_entry_id FROM time_entry_events
@@ -239,7 +245,7 @@ export async function punchOut(
     const { rows } = await db.query<TimeEntryRow>('SELECT * FROM time_entries WHERE id = $1', [
       existingEvent.rows[0].time_entry_id,
     ]);
-    if (rows[0]) return rowToTimeEntry(rows[0]);
+    if (rows[0]) return { timeEntry: rowToTimeEntry(rows[0]) };
   }
 
   const open = await getCurrentOpenEntry(db, user.userId);
@@ -289,7 +295,27 @@ export async function punchOut(
     recordedAt: new Date(input.timestamp),
   });
 
-  return rowToTimeEntry(row);
+  // Meal-break compliance check. Soft warnings only — never blocks
+  // the punch-out, because trapping a worker on the clock would be
+  // worse than the violation itself.
+  const [orgRow, userRow] = await Promise.all([
+    db.query<{ timezone: string }>(`SELECT timezone FROM organizations LIMIT 1`),
+    db.query<{ worksite: 'onshore' | 'offshore' }>(`SELECT worksite FROM users WHERE id = $1`, [
+      user.userId,
+    ]),
+  ]);
+  const mealBreakMinutes = await loadMealBreakMinutes(db, row.id);
+  const mealEval = evaluateMealBreak({
+    shiftMinutes: row.duration_minutes ?? 0,
+    mealBreakMinutes,
+    worksite: userRow.rows[0]?.worksite ?? 'onshore',
+    orgTimezone: orgRow.rows[0]?.timezone ?? 'UTC',
+  });
+
+  return {
+    timeEntry: rowToTimeEntry(row),
+    ...(mealEval.warnings.length > 0 ? { warnings: mealEval.warnings } : {}),
+  };
 }
 
 export async function listEntries(

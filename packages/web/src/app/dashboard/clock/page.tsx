@@ -8,9 +8,25 @@ interface CurrentEntry {
   entry: { id: string; punchInAt: string } | null;
 }
 
+interface PunchWarning {
+  code: string;
+  message: string;
+}
+
+interface PunchInResult {
+  timeEntry: { id: string };
+  warnings?: PunchWarning[];
+}
+
+interface PunchOutResult {
+  timeEntry: { id: string };
+  warnings?: PunchWarning[];
+}
+
 export default function ClockPage() {
   const qc = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<PunchWarning[]>([]);
 
   const current = useQuery<CurrentEntry>({
     queryKey: ['time-tracking', 'current'],
@@ -20,34 +36,42 @@ export default function ClockPage() {
   const punchIn = useMutation({
     mutationFn: async () => {
       const location = await getLocation();
-      return apiClient.post('/api/v1/time-tracking/punch-in', {
+      return apiClient.post<PunchInResult>('/api/v1/time-tracking/punch-in', {
         clientGeneratedId: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         location,
         deviceInfo: { deviceId: 'web', platform: 'web' },
       });
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setMessage('Clocked in successfully');
+      setWarnings(data?.warnings ?? []);
       qc.invalidateQueries({ queryKey: ['time-tracking', 'current'] });
     },
-    onError: (e: Error) => setMessage(e.message),
+    onError: (e: Error) => {
+      setMessage(e.message);
+      setWarnings([]);
+    },
   });
 
   const punchOut = useMutation({
     mutationFn: async () => {
       const location = await getLocation();
-      return apiClient.post('/api/v1/time-tracking/punch-out', {
+      return apiClient.post<PunchOutResult>('/api/v1/time-tracking/punch-out', {
         clientGeneratedId: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         location,
       });
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setMessage('Clocked out successfully');
+      setWarnings(data?.warnings ?? []);
       qc.invalidateQueries({ queryKey: ['time-tracking', 'current'] });
     },
-    onError: (e: Error) => setMessage(e.message),
+    onError: (e: Error) => {
+      setMessage(e.message);
+      setWarnings([]);
+    },
   });
 
   const isOpen = !!current.data?.entry;
@@ -69,12 +93,27 @@ export default function ClockPage() {
           {isOpen ? 'Punch Out' : 'Punch In'}
         </button>
         {message && <p className="mt-4 text-sm text-slate-600">{message}</p>}
+        {warnings.length > 0 && (
+          <div className="mt-4 space-y-2 text-left">
+            {warnings.map((w, i) => (
+              <div
+                key={`${w.code}-${i}`}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+              >
+                <div className="font-medium">Heads up</div>
+                <div>{w.message}</div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-async function getLocation(): Promise<{ latitude: number; longitude: number; accuracy: number } | undefined> {
+async function getLocation(): Promise<
+  { latitude: number; longitude: number; accuracy: number } | undefined
+> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return undefined;
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(

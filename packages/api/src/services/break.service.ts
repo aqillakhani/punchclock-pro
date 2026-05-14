@@ -10,6 +10,34 @@ import {
 import { AppError } from '../lib/errors.js';
 import { publishTimeEvent } from '../events/publisher.js';
 
+// ---- Meal-break rules (design B6) ---------------------------------
+// Pure evaluator + types live in meal-break.service.ts so tests can
+// import them without the publisher → logger → env chain.
+
+export {
+  evaluateMealBreak,
+  type MealBreakInput,
+  type MealBreakEvaluation,
+  type MealBreakWarning,
+  type Worksite,
+} from './meal-break.service.js';
+
+/**
+ * DB-side helper: sum completed meal-break minutes on a given
+ * time entry.
+ */
+export async function loadMealBreakMinutes(db: PoolClient, timeEntryId: string): Promise<number> {
+  const { rows } = await db.query<{ total_minutes: string }>(
+    `SELECT COALESCE(SUM(duration_minutes), 0)::text AS total_minutes
+     FROM breaks
+     WHERE time_entry_id = $1
+       AND status = 'completed'
+       AND break_type IN ('lunch', 'unpaid')`,
+    [timeEntryId],
+  );
+  return Number(rows[0]?.total_minutes ?? 0);
+}
+
 interface BreakRow {
   id: string;
   organization_id: string;
