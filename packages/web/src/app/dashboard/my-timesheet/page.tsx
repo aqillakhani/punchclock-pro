@@ -4,6 +4,14 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$',
+  PHP: '₱',
+  INR: '₹',
+  EUR: '€',
+  GBP: '£',
+};
+
 interface DayHours {
   date: string;
   hours: number;
@@ -24,6 +32,11 @@ interface MyTimesheet {
   estimatedPay: number;
 }
 
+interface MeWithFx {
+  fx_rates: Record<string, number> | null;
+  pay_currency: string;
+}
+
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export default function MyTimesheetPage() {
@@ -37,8 +50,17 @@ export default function MyTimesheetPage() {
     queryFn: () => apiClient.get(`/api/v1/me/timesheet?from=${fromIso}&to=${toIso}`),
   });
 
+  const me = useQuery<MeWithFx>({
+    queryKey: ['auth', 'me'],
+    queryFn: () => apiClient.get('/auth/me'),
+    staleTime: 5 * 60 * 1000,
+  });
+  const fxRates = me.data?.fx_rates ?? {};
+
   const data = ts.data;
   const is1099 = data?.workerType === 'contractor_1099';
+  const isOffshore = !!data && data.payCurrency !== 'USD';
+  const fxRate = data ? (fxRates[data.payCurrency] ?? null) : null;
   const dailyByIso = useMemo(() => {
     const m = new Map<string, number>();
     for (const d of data?.days ?? []) m.set(d.date, d.hours);
@@ -95,8 +117,15 @@ export default function MyTimesheetPage() {
         />
         <SummaryCard
           label="Est. pay"
-          value={fmtMoney(data?.estimatedPay ?? 0, data?.payCurrency ?? 'USD')}
+          value={fmtMoney(data?.estimatedPay ?? 0, 'USD')}
           tone="text-emerald-600"
+          subtext={
+            isOffshore && fxRate !== null
+              ? `≈ ${CURRENCY_SYMBOLS[data!.payCurrency] ?? ''}${fmtBigInt(
+                  (data!.estimatedPay ?? 0) * fxRate,
+                )} ${data!.payCurrency}`
+              : undefined
+          }
         />
       </div>
 
@@ -147,15 +176,30 @@ export default function MyTimesheetPage() {
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: string; tone?: string }) {
+function SummaryCard({
+  label,
+  value,
+  tone,
+  subtext,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+  subtext?: string;
+}) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-1 text-xl font-semibold tabular-nums ${tone ?? 'text-slate-900'}`}>
         {value}
       </div>
+      {subtext && <div className="mt-0.5 text-xs text-slate-500 tabular-nums">{subtext}</div>}
     </div>
   );
+}
+
+function fmtBigInt(n: number): string {
+  return Math.round(n).toLocaleString();
 }
 
 function startOfWeek(d: Date): Date {

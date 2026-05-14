@@ -283,10 +283,12 @@ async function seed(): Promise<void> {
       `INSERT INTO organizations
          (name, slug, timezone, geofencing_enabled, break_tracking_enabled,
           weekly_labor_budget,
-          qb_chart_of_accounts)
+          qb_chart_of_accounts,
+          fx_rates)
        VALUES ($1, $2, $3, TRUE, TRUE,
                6500.00,
-               '{"laborExpense":"5100 · Labor Expense","contractorExpense":"5200 · Contractor Expense"}'::jsonb)
+               '{"laborExpense":"5100 · Labor Expense","contractorExpense":"5200 · Contractor Expense"}'::jsonb,
+               '{"PHP":56.5,"INR":84.2,"USD":1}'::jsonb)
        RETURNING id`,
       [STORE.name, slug, STORE.timezone],
     );

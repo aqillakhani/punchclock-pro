@@ -20,7 +20,7 @@ interface ApiShift {
   shift_start: string;
   shift_end: string;
   duration_minutes: number;
-  shift_type: 'standard' | 'overtime' | 'double';
+  shift_type: 'standard' | 'overtime' | 'double' | 'time_off';
   status: string;
 }
 
@@ -78,6 +78,24 @@ export default function SchedulePage() {
   const deleteShift = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/api/v1/scheduling/shifts/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['scheduling', 'shifts'] }),
+  });
+
+  const copyLastWeek = useMutation({
+    mutationFn: () =>
+      apiClient.post<{ inserted: number; sourceCount: number }>(
+        '/api/v1/scheduling/shifts/copy-week',
+        {
+          fromMonday: toIsoDate(addDays(weekStart, -7)),
+          toMonday: fromIso,
+        },
+      ),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['scheduling', 'shifts'] });
+      alert(
+        `Copied ${data.inserted} shifts from last week (${data.sourceCount} source shifts found).`,
+      );
+    },
+    onError: (e: Error) => alert(`Copy failed: ${e.message}`),
   });
 
   const userById = useMemo(() => {
@@ -145,6 +163,22 @@ export default function SchedulePage() {
             className={btnGhost}
           >
             Next →
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                confirm(
+                  "Copy last week's schedule into this week? Existing shifts won't be overwritten.",
+                )
+              ) {
+                copyLastWeek.mutate();
+              }
+            }}
+            disabled={copyLastWeek.isPending}
+            className={btnGhost}
+          >
+            {copyLastWeek.isPending ? 'Copying…' : '⇊ Copy last week'}
           </button>
           <button
             type="button"
@@ -224,6 +258,8 @@ export default function SchedulePage() {
           </table>
         </div>
       </div>
+
+      <CoverageHeatmap shifts={shifts.data ?? []} days={days} />
 
       {modalOpen && (
         <Modal onClose={() => setModalOpen(false)} title="Add shift">
@@ -454,3 +490,100 @@ const btnPrimary =
 
 const btnGhost =
   'rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50';
+
+// ---- Coverage heatmap (D4d) ---------------------------------------
+
+function CoverageHeatmap({
+  shifts,
+  days,
+}: {
+  shifts: ApiShift[];
+  days: { iso: string; date: Date; dayOfWeekMon: number }[];
+}) {
+  // Build a 7-day × 24-hour count grid. A shift contributes +1 to
+  // every hour-slot it overlaps. Time-off rows and cancelled shifts
+  // are ignored — they don't constitute "coverage."
+  const grid = useMemo(() => {
+    const g: number[][] = days.map(() => Array(24).fill(0));
+    for (const s of shifts) {
+      if (s.shift_type === 'time_off' || s.status === 'cancelled') continue;
+      const dayIdx = days.findIndex((d) => d.iso === s.scheduled_date);
+      if (dayIdx === -1) continue;
+      const startH = parseInt(s.shift_start.slice(0, 2), 10);
+      const endRaw = parseInt(s.shift_end.slice(0, 2), 10);
+      // Wraps midnight → cap into next day's first hours via spillover.
+      let endH = endRaw <= startH ? endRaw + 24 : endRaw;
+      // Cap at 24 for this day; we don't try to write into the next
+      // day's row to keep the visual honest about same-day coverage.
+      endH = Math.min(endH, 24);
+      for (let h = startH; h < endH; h += 1) {
+        if (g[dayIdx]) g[dayIdx][h] = (g[dayIdx][h] ?? 0) + 1;
+      }
+    }
+    return g;
+  }, [shifts, days]);
+
+  return (
+    <section className="mt-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <header className="mb-3 flex items-baseline justify-between">
+        <h2 className="text-base font-semibold text-slate-900">Coverage map</h2>
+        <span className="text-xs text-slate-500">
+          <span className="mr-3">
+            <CovSwatch n={0} /> 0
+          </span>
+          <span className="mr-3">
+            <CovSwatch n={1} /> 1
+          </span>
+          <span>
+            <CovSwatch n={2} /> ≥2
+          </span>
+        </span>
+      </header>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[10px]">
+          <thead>
+            <tr>
+              <th className="w-10 px-1 text-right text-slate-400" />
+              {Array.from({ length: 24 }, (_, h) => (
+                <th key={h} className="px-0.5 text-center text-slate-400">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {days.map((d, di) => (
+              <tr key={d.iso}>
+                <td className="px-1 text-right font-medium text-slate-500">
+                  {DAY_LABELS[d.dayOfWeekMon]}
+                </td>
+                {Array.from({ length: 24 }, (_, h) => {
+                  const n = grid[di]?.[h] ?? 0;
+                  return (
+                    <td key={h} className="px-px py-px">
+                      <div
+                        className={`h-5 w-full rounded-sm ${covClass(n)}`}
+                        title={`${n} on shift`}
+                      />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function covClass(n: number): string {
+  if (n === 0) return 'bg-rose-200';
+  if (n === 1) return 'bg-amber-200';
+  if (n === 2) return 'bg-emerald-200';
+  return 'bg-emerald-400';
+}
+
+function CovSwatch({ n }: { n: number }) {
+  return <span className={`inline-block h-3 w-3 rounded-sm align-middle ${covClass(n)}`} />;
+}

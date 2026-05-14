@@ -250,6 +250,13 @@ export const documentUploadSchema = z.object({
 
 export type DocumentUploadInput = z.infer<typeof documentUploadSchema>;
 
+export const copyWeekSchema = z.object({
+  fromMonday: z.string().regex(ymdRegex, 'fromMonday must be YYYY-MM-DD'),
+  toMonday: z.string().regex(ymdRegex, 'toMonday must be YYYY-MM-DD'),
+});
+
+export type CopyWeekInput = z.infer<typeof copyWeekSchema>;
+
 export type TimeOffRequestInput = z.infer<typeof timeOffRequestSchema>;
 export type TimeOffDecisionInput = z.infer<typeof timeOffDecisionSchema>;
 export type ShiftTradePostInput = z.infer<typeof shiftTradePostSchema>;

@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { Router } from 'express';
-import { PERMISSIONS, shiftCreateSchema } from '@punchclock/shared';
+import { PERMISSIONS, copyWeekSchema, shiftCreateSchema } from '@punchclock/shared';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
@@ -261,6 +261,73 @@ schedulingRouter.post(
       ],
     );
     created(res, rows[0]);
+  }),
+);
+
+schedulingRouter.post(
+  '/shifts/copy-week',
+  requirePermission(PERMISSIONS.EDIT_SCHEDULE),
+  validateBody(copyWeekSchema),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const { fromMonday, toMonday } = req.body as { fromMonday: string; toMonday: string };
+
+    // Pull source week (excluding cancelled + time_off).
+    const { rows: source } = await db.query<{
+      user_id: string;
+      shift_start: string;
+      shift_end: string;
+      duration_minutes: number;
+      shift_type: string;
+      required_break_minutes: number;
+      notes: string | null;
+      day_offset: string;
+    }>(
+      `SELECT user_id, shift_start, shift_end, duration_minutes,
+              shift_type, required_break_minutes, notes,
+              (scheduled_date - $1::date)::text AS day_offset
+       FROM shifts
+       WHERE scheduled_date >= $1::date
+         AND scheduled_date <  $1::date + INTERVAL '7 days'
+         AND status <> 'cancelled' AND shift_type <> 'time_off'`,
+      [fromMonday],
+    );
+
+    let inserted = 0;
+    for (const s of source) {
+      // Skip if a non-cancelled shift already exists in the target slot.
+      const targetDate = `($1::date + ($2 || ' days')::interval)::date`;
+      const { rows: dup } = await db.query<{ id: string }>(
+        `SELECT id FROM shifts
+         WHERE user_id = $3 AND scheduled_date = ${targetDate}
+           AND shift_start = $4 AND status <> 'cancelled'
+         LIMIT 1`,
+        [toMonday, s.day_offset, s.user_id, s.shift_start],
+      );
+      if (dup.length > 0) continue;
+      await db.query(
+        `INSERT INTO shifts
+           (organization_id, user_id, scheduled_date, shift_start, shift_end,
+            duration_minutes, shift_type, required_break_minutes, notes)
+         VALUES ($1, $2, ${targetDate}, $5, $6, $7, $8, $9, $10)`,
+        [
+          req.user.organizationId,
+          s.user_id,
+          toMonday,
+          s.day_offset,
+          s.shift_start,
+          s.shift_end,
+          s.duration_minutes,
+          s.shift_type,
+          s.required_break_minutes,
+          s.notes,
+        ],
+      );
+      inserted += 1;
+    }
+
+    ok(res, { fromMonday, toMonday, sourceCount: source.length, inserted });
   }),
 );
 
