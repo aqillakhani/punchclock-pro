@@ -505,6 +505,52 @@ adminRouter.post(
   }),
 );
 
+// ---- Audit log viewer (owner-only) ---------------------------------
+
+adminRouter.get(
+  '/audit-logs',
+  requirePermission(PERMISSIONS.VIEW_AUDIT_LOG),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const from = typeof req.query.from === 'string' ? req.query.from : null;
+    const to = typeof req.query.to === 'string' ? req.query.to : null;
+    const actorId = typeof req.query.actorId === 'string' ? req.query.actorId : null;
+    const action = typeof req.query.action === 'string' ? req.query.action : null;
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (from) {
+      params.push(from);
+      conditions.push(`a.created_at >= $${params.length}::date`);
+    }
+    if (to) {
+      params.push(to);
+      conditions.push(`a.created_at < ($${params.length}::date + INTERVAL '1 day')`);
+    }
+    if (actorId) {
+      params.push(actorId);
+      conditions.push(`a.actor_user_id = $${params.length}`);
+    }
+    if (action) {
+      params.push(`%${action}%`);
+      conditions.push(`a.action ILIKE $${params.length}`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { rows } = await db.query(
+      `SELECT a.id, a.actor_user_id, a.resource_type, a.resource_id, a.action,
+              a.changes, a.ip_address::text AS ip_address, a.user_agent, a.created_at,
+              u.first_name, u.last_name, u.email
+       FROM audit_logs a
+       LEFT JOIN users u ON u.id = a.actor_user_id
+       ${where}
+       ORDER BY a.created_at DESC
+       LIMIT 500`,
+      params,
+    );
+    ok(res, rows);
+  }),
+);
+
 // ---- Payroll export (IIF + QBO JSON) -------------------------------
 
 function parseDateRange(req: import('express').Request): { fromDate: string; toDate: string } {
