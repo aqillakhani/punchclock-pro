@@ -16,6 +16,9 @@ const STORE = {
 
 const DEFAULT_PASSWORD = 'Demo12345';
 
+type WorkerType = 'W2' | 'contractor_1099';
+type Worksite = 'onshore' | 'offshore';
+
 interface SeedUser {
   email: string;
   firstName: string;
@@ -24,6 +27,9 @@ interface SeedUser {
   payRate: number;
   category: 'in_store' | 'remote';
   jobTitle: string;
+  workerType?: WorkerType;
+  worksite?: Worksite;
+  payCurrency?: string;
 }
 
 const USERS: SeedUser[] = [
@@ -215,6 +221,8 @@ const USERS: SeedUser[] = [
     payRate: 16,
     category: 'remote',
     jobTitle: 'Online Orders (remote)',
+    workerType: 'contractor_1099',
+    payCurrency: 'INR',
   },
   {
     email: 'isaac.cole@quickstop.test',
@@ -224,6 +232,8 @@ const USERS: SeedUser[] = [
     payRate: 16,
     category: 'remote',
     jobTitle: 'Online Orders (remote)',
+    workerType: 'contractor_1099',
+    payCurrency: 'PHP',
   },
   {
     email: 'amani.davis@quickstop.test',
@@ -233,6 +243,8 @@ const USERS: SeedUser[] = [
     payRate: 16,
     category: 'remote',
     jobTitle: 'Online Orders (remote)',
+    workerType: 'contractor_1099',
+    payCurrency: 'PHP',
   },
   {
     email: 'leo.bauer@quickstop.test',
@@ -282,10 +294,31 @@ async function seed(): Promise<void> {
       { id: string; category: SeedUser['category']; payRate: number; role: SeedUser['role'] }
     >();
     for (const u of USERS) {
+      // Per design §3b, the in-store/remote distinction defaults to
+      // onshore W-2 vs offshore W-2; specific 1099 contractors and
+      // non-USD payouts override per-row in the USERS array above.
+      const worksite: Worksite = u.worksite ?? (u.category === 'remote' ? 'offshore' : 'onshore');
+      const workerType: WorkerType = u.workerType ?? 'W2';
+      const payCurrency = u.payCurrency ?? 'USD';
       const { rows } = await client.query<{ id: string }>(
-        `INSERT INTO users (organization_id, email, first_name, last_name, password_hash, role, pay_rate, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active') RETURNING id`,
-        [orgId, u.email, u.firstName, u.lastName, passwordHash, u.role, u.payRate],
+        `INSERT INTO users
+           (organization_id, email, first_name, last_name, password_hash,
+            role, pay_rate, status, worker_type, worksite, job_title, pay_currency)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, $10, $11)
+         RETURNING id`,
+        [
+          orgId,
+          u.email,
+          u.firstName,
+          u.lastName,
+          passwordHash,
+          u.role,
+          u.payRate,
+          workerType,
+          worksite,
+          u.jobTitle,
+          payCurrency,
+        ],
       );
       userIds.set(u.email, {
         id: rows[0]!.id,
@@ -392,6 +425,77 @@ async function seed(): Promise<void> {
       });
     }
     logger.info({ count: currentlyClockedIn.length }, 'inserted in-progress entries');
+
+    // -- v2 seed data ---------------------------------------------------
+    // Two pending time-off requests (one per requester) so Jordan/Priya
+    // see a non-empty queue when Phase B's Time off page lands.
+    const timeOffSeeds: { email: string; daysFromNow: number; days: number; reason: string }[] = [
+      {
+        email: 'sofia.delgado@quickstop.test',
+        daysFromNow: 9,
+        days: 2,
+        reason: "Doctor's appointment",
+      },
+      {
+        email: 'diego.alvarez@quickstop.test',
+        daysFromNow: 14,
+        days: 3,
+        reason: 'Family wedding out of state',
+      },
+    ];
+    for (const t of timeOffSeeds) {
+      const info = userIds.get(t.email);
+      if (!info) continue;
+      const start = addDays(todayLocal, t.daysFromNow);
+      const end = addDays(start, t.days - 1);
+      await client.query(
+        `INSERT INTO time_off_requests
+           (organization_id, user_id, start_date, end_date, reason, status)
+         VALUES ($1, $2, $3, $4, $5, 'pending')`,
+        [orgId, info.id, isoDate(start), isoDate(end), t.reason],
+      );
+    }
+    logger.info({ count: timeOffSeeds.length }, 'inserted pending time-off requests');
+
+    // One open shift trade: Mei posts an upcoming Saturday shift.
+    const meiInfo = userIds.get('mei.chen@quickstop.test');
+    if (meiInfo) {
+      const { rows: meiShift } = await client.query<{ id: string }>(
+        `SELECT id FROM shifts
+         WHERE user_id = $1 AND scheduled_date >= CURRENT_DATE
+         ORDER BY scheduled_date ASC
+         LIMIT 1`,
+        [meiInfo.id],
+      );
+      if (meiShift[0]) {
+        await client.query(
+          `INSERT INTO shift_trades
+             (organization_id, shift_id, from_user_id, status)
+           VALUES ($1, $2, $3, 'open')`,
+          [orgId, meiShift[0].id, meiInfo.id],
+        );
+        logger.info({ shiftId: meiShift[0].id }, 'inserted open shift trade');
+      }
+    }
+
+    // One historical cap-block in the audit log (3 days ago) so the
+    // Phase D audit-log viewer has something interesting to show.
+    const overworkerInfo = userIds.get('kara.lopez@quickstop.test');
+    if (overworkerInfo) {
+      const blockedAt = new Date(now.getTime() - 3 * 24 * 60 * 60_000);
+      await client.query(
+        `INSERT INTO audit_logs
+           (organization_id, actor_user_id, resource_type, action, changes, created_at)
+         VALUES ($1, $2, 'time_entry', 'cap_blocked', $3::jsonb, $4)`,
+        [
+          orgId,
+          overworkerInfo.id,
+          JSON.stringify({ scope: 'daily', cap: 480, current: 480, reason: 'overnight overrun' }),
+          blockedAt,
+        ],
+      );
+      logger.info('inserted cap-block audit entry');
+    }
 
     await client.query('COMMIT');
     logger.info('seed complete');
