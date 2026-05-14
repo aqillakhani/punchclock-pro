@@ -307,3 +307,110 @@ visually, something's not right — see Troubleshooting.
 - `06-reports.png` — Date range payroll summary + table
 - `07-settings.png` — Org settings + geofence table
 - `08-clock.png` — Browser clock-in screen (alt path if mobile isn't ready)
+
+---
+
+## 10. v2 additions — what to show after the core flow
+
+Everything below shipped in Phases A–D after the v1 demo. The full
+RBAC matrix lives in `docs/permissions.md`; this section maps each
+new surface to what to click.
+
+### 10a. Worker self-service (sign in as Alex Rivera, employee)
+
+- **My Timesheet** — own week with regular / OT / est. pay. Note the
+  USD value; for a 1099 contractor (sign in as `maya.singh@quickstop.test`)
+  the card flips to "Total billed" + "Straight-time" and shows the
+  conversion `$X USD ≈ ₹Y INR` underneath.
+- **My Schedule** — own shifts only, read-only. PTO bars render in
+  violet when an approved time-off request covers the day.
+- **Time off** — fill the request form, hit Submit. The pill flips to
+  "pending" instantly.
+- **Trades** — pick one of your future shifts → "Post for trade".
+
+### 10b. Manager flow (sign in as Jordan Kim)
+
+- **Time off** — pending queue at the bottom shows Alex's request;
+  click Approve. The Approve button materializes a placeholder shift
+  on My Schedule for the affected dates (visible as PTO bars).
+- **Trades** — accepted trades route to a "Pending manager approval"
+  queue; one click swaps the shift's owner.
+
+### 10c. Hard caps + meal-break warnings (any worker)
+
+- Punch in twice in one day for the same employee. After 8h of completed
+  time today, the next punch-in returns
+  **"Daily 8-hour cap reached"** (409 CAP_EXCEEDED). Override is a
+  per-user `cap_exempt_until` window on the Team page (manager+).
+- Punch out from a shift longer than 6h with no break — the response
+  includes a `missing_meal_break` warning, surfaced as an amber chip
+  on the Clock screen.
+- Set the org timezone to `America/Los_Angeles` to enforce CA's
+  30-minute break rule for shifts ≥ 5h.
+
+### 10d. Punch verification (Settings → Punch verification)
+
+Owner toggles any subset of: PIN, IP, Selfie, Device. Default is none
+of them on — geofence is the existing gate.
+
+- **PIN flow:** turn it on → workers see a "Set a PIN" amber card on
+  Clock; once set, every punch needs the PIN. Honest tooltip: "PIN
+  sharing is the most common buddy-punching vector."
+- **IP flow:** paste the store's public CIDR (e.g. `73.42.18.0/24`),
+  punch from another network → 403 IP_RESTRICTED. Offshore workers
+  are auto-exempt.
+
+### 10e. Accounting (sign in as owner)
+
+- **Overview** → owner-only **Labor cost** card: Scheduled / Actual /
+  Weekly budget. Card border flips red when over budget.
+- **Reports** → ⬇ CSV (existing) + new ⬇ QuickBooks (.iif) and
+  ⬇ QBO (.json) buttons. Owner-only. Both per-entry balanced.
+- **Settings → Compliance + budget** → toggle predictive scheduling
+  (14-day notice). With it on, attempting to add a shift inside 14
+  days returns 409 PREDICTIVE_LOCK; manager can `?force=true` from a
+  power-user URL and the override is logged.
+
+### 10f. C-store specifics
+
+- **Cash drawer:** turn `feature_cash_drawer` on in Settings. In-store
+  workers see a "Starting drawer count $___" / "Ending drawer count"
+  field on Clock. Counts above $5 variance flag for manager review on
+  the cash-drawer admin endpoint.
+- **Documents:** /dashboard/documents lets workers add I-9 / W-4 /
+  permit URLs. Manager view shows expiry chips (rose = expired, amber
+  = within 30 days) and a one-click "Mark verified" button.
+
+### 10g. Schedule polish
+
+- **Coverage map:** below the schedule grid — 7-day × 24-hour heatmap.
+  Rose cells = 0 coverage (gap), amber = 1, emerald = ≥2.
+- **⇊ Copy last week:** one-click bulk-copy of last week's standard
+  shifts into this week. Skips slots that already have a non-cancelled
+  shift.
+- **Conflict gates** on the POST: overlap, weekly cap exceeded, or
+  &lt; 10h rest after the previous shift → 409 SCHEDULE_CONFLICT.
+  `?force=true` overrides.
+
+### 10h. Owner power tools
+
+- **Audit log** — owner-only filterable table: cap blocks, predictive
+  overrides, manager approvals, etc. Top-action chips for one-click
+  filtering.
+- **Preview as…** — owner picks any worker → dashboard renders with
+  that worker's role + permissions; a sticky amber banner shows the
+  preview state with an Exit button. The owner's real JWT stays in
+  place; this is purely a header-driven role override.
+
+### Deferred from v2
+
+These are documented in the design doc but not yet shipped. Mention
+only if asked:
+
+- Selfie capture on punch (needs EAS native build for the camera).
+- Device pinning (needs new `user_devices` table + push notification
+  flow for owner approval).
+- Kiosk QR clock-in (needs a public route + JWT-as-token).
+- Push notifications (Expo push service + mobile work).
+- Multi-store full UI (schema is ready; UI is single-store still).
+- Real-QB import smoke test (manual; format is per Intuit docs).
