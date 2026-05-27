@@ -72,3 +72,11 @@ export const pinRateLimiter = (): RateLimitRequestHandler =>
     keyGenerator: userOrIpKey,
     message: 'Too many PIN updates — wait a minute and try again.',
   });
+
+/** 5 forgot/reset-password requests per 15 min per IP. */
+export const passwordResetRateLimiter = (): RateLimitRequestHandler =>
+  createRateLimiter({
+    windowMs: 15 * MINUTE,
+    limit: 5,
+    message: 'Too many password reset attempts — wait a few minutes and try again.',
+  });

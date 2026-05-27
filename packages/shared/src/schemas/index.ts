@@ -146,6 +146,16 @@ export const loginRequestSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
+export const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+export const resetPasswordSchema = z.object({
+  // Raw token from the emailed link (base64url, ~43 chars).
+  token: z.string().min(16).max(512),
+  password: z.string().min(8).max(128),
+});
+
 const verificationMethodSchema = z.enum(['selfie', 'pin', 'ip', 'device']);
 
 // Loose CIDR validation — full v4/v6 parsing is the API's job.
@@ -287,4 +297,6 @@ export type ShiftCreateInput = z.infer<typeof shiftCreateSchema>;
 export type InviteUserInput = z.infer<typeof inviteUserSchema>;
 export type SignupRequestInput = z.infer<typeof signupRequestSchema>;
 export type LoginRequestInput = z.infer<typeof loginRequestSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type SyncBatchInput = z.infer<typeof syncBatchRequestSchema>;
