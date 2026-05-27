@@ -1,0 +1,55 @@
+# Fly.io configuration for the PunchClock Pro API.
+#
+# Deploy from the MONOREPO ROOT (the Docker build context must include the
+# workspace lockfile + the shared package):
+#
+#   flyctl deploy . --remote-only \
+#     --config packages/api/fly.toml \
+#     --dockerfile packages/api/Dockerfile
+#
+# Required secrets (set once with `flyctl secrets set ... --config packages/api/fly.toml`):
+#   DATABASE_URL            Neon pooled connection string (?sslmode=require)
+#   REDIS_URL               Upstash redis:// (or rediss://) URL
+#   JWT_SECRET              64 random bytes (openssl rand -base64 64)
+#   CORS_ALLOWED_ORIGINS    https://<your web domain>  (no localhost in prod)
+#   WEB_APP_URL             https://<your web domain>  (used in email links)
+#   RESEND_API_KEY          if EMAIL_PROVIDER=resend
+#   SENTRY_DSN              optional, enables error tracking
+#   S3_ENDPOINT / S3_BUCKET / S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY  for documents
+# APP_VERSION is injected at deploy time: `--build-arg`/secret or `flyctl deploy --env APP_VERSION=$(git rev-parse --short HEAD)`.
+
+app = "punchclock-api"
+primary_region = "ord"
+
+[env]
+  NODE_ENV = "production"
+  API_PORT = "8080"
+  DATABASE_SSL = "true"
+  EMAIL_PROVIDER = "resend"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # Keep one machine warm — the API holds long-lived Socket.io connections.
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+# Liveness: 200 as long as the process is up. Readiness (/health/ready) and the
+# full report (/health) are used by external uptime monitoring, not by Fly.
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  path = "/health/live"
+  timeout = "5s"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
