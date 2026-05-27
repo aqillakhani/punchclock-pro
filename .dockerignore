@@ -1,0 +1,25 @@
+# Build context hygiene for the API image (context = monorepo root).
+# Keep package.json, pnpm-lock.yaml, pnpm-workspace.yaml, tsconfig*, turbo.json,
+# and package source — drop everything regenerated or irrelevant to the build.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+**/*.log
+**/.DS_Store
+
+# Secrets must never enter an image layer.
+.env
+.env.*
+!.env.example
+
+# Not needed to build/run the API.
+docs
+tools
+*.docx
+**/*.test.ts
+**/*.test.tsx

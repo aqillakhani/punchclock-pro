@@ -124,7 +124,9 @@ export const shiftCreateSchema = z.object({
 
 export const inviteUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(128),
+  // Optional: when omitted, the worker is emailed a setup link to choose
+  // their own password (the owner never sees it).
+  password: z.string().min(8).max(128).optional(),
   firstName: z.string().min(1).max(100).optional(),
   lastName: z.string().min(1).max(100).optional(),
   role: roleSchema.default(ROLES.EMPLOYEE),
@@ -144,6 +146,16 @@ export const signupRequestSchema = z.object({
 export const loginRequestSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1).max(128),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+export const resetPasswordSchema = z.object({
+  // Raw token from the emailed link (base64url, ~43 chars).
+  token: z.string().min(16).max(512),
+  password: z.string().min(8).max(128),
 });
 
 const verificationMethodSchema = z.enum(['selfie', 'pin', 'ip', 'device']);
@@ -241,7 +253,8 @@ export const documentTypeSchema = z.enum([
 
 export const documentUploadSchema = z.object({
   documentType: documentTypeSchema,
-  storageUrl: z.string().url().optional(),
+  // Holds either a legacy public URL or an R2 object key (from presign-upload).
+  storageUrl: z.string().min(1).max(2048).optional(),
   expiresAt: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'expiresAt must be YYYY-MM-DD')
@@ -249,6 +262,14 @@ export const documentUploadSchema = z.object({
 });
 
 export type DocumentUploadInput = z.infer<typeof documentUploadSchema>;
+
+// Request a presigned upload URL for a document file.
+export const documentPresignSchema = z.object({
+  documentType: documentTypeSchema,
+  contentType: z.string().min(1).max(128),
+});
+
+export type DocumentPresignInput = z.infer<typeof documentPresignSchema>;
 
 export const copyWeekSchema = z.object({
   fromMonday: z.string().regex(ymdRegex, 'fromMonday must be YYYY-MM-DD'),
@@ -287,4 +308,6 @@ export type ShiftCreateInput = z.infer<typeof shiftCreateSchema>;
 export type InviteUserInput = z.infer<typeof inviteUserSchema>;
 export type SignupRequestInput = z.infer<typeof signupRequestSchema>;
 export type LoginRequestInput = z.infer<typeof loginRequestSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type SyncBatchInput = z.infer<typeof syncBatchRequestSchema>;

@@ -1,8 +1,8 @@
 import express, { type Express } from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { corsOrigins, loadEnv } from './config/env.js';
+import { securityHeaders } from './config/security.js';
 import { logger } from './config/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { healthRouter } from './routes/health.js';
@@ -22,7 +22,7 @@ export function createApp(): Express {
   // Required so req.ip resolves to the client address when the API
   // sits behind nginx / ALB / Cloud Run. In dev this is harmless.
   app.set('trust proxy', true);
-  app.use(helmet());
+  app.use(securityHeaders());
   app.use(cors({ origin: corsOrigins(env), credentials: true }));
   app.use(pinoHttp({ logger }));
   app.use(express.json({ limit: '1mb' }));

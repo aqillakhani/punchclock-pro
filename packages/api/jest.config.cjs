@@ -3,6 +3,7 @@ module.exports = {
   preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
   extensionsToTreatAsEsm: ['.ts'],
+  setupFiles: ['<rootDir>/tests/setup-env.ts'],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
     '^@punchclock/shared$': '<rootDir>/../shared/src/index.ts',
@@ -18,7 +19,7 @@ module.exports = {
     ],
   },
   testMatch: ['<rootDir>/src/**/*.test.ts', '<rootDir>/tests/**/*.test.ts'],
-  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/db/migrate.ts'],
+  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/db/migrate.ts', '!src/db/prod-seed.ts', '!src/db/prune-audit-logs.ts'],
   coverageThreshold: {
     global: {
       branches: 70,

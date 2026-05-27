@@ -36,7 +36,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 to-white p-6">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-brand-50 to-white p-6">
       <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
         <h1 className="mb-1 text-2xl font-bold text-brand-900">Sign in</h1>
         <p className="mb-6 text-sm text-slate-600">PunchClock Pro</p>
@@ -63,6 +63,11 @@ export default function LoginPage() {
               className="w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </label>
+          <div className="text-right">
+            <Link href="/forgot-password" className="text-xs text-brand-700 hover:underline">
+              Forgot password?
+            </Link>
+          </div>
           {error && (
             <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
           )}
@@ -80,6 +85,16 @@ export default function LoginPage() {
             Bootstrap your organization
           </Link>
         </p>
+        <div className="mt-6 border-t border-slate-200 pt-4 text-center">
+          <div className="flex justify-center gap-4 text-xs text-slate-500">
+            <Link href="/terms" className="hover:text-slate-700 hover:underline">
+              Terms of Service
+            </Link>
+            <Link href="/privacy" className="hover:text-slate-700 hover:underline">
+              Privacy Policy
+            </Link>
+          </div>
+        </div>
       </div>
     </main>
   );

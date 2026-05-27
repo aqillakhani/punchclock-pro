@@ -1,16 +1,44 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
-import { loginRequestSchema, signupRequestSchema } from '@punchclock/shared';
+import {
+  forgotPasswordSchema,
+  loginRequestSchema,
+  resetPasswordSchema,
+  signupRequestSchema,
+  type ForgotPasswordInput,
+  type ResetPasswordInput,
+} from '@punchclock/shared';
 import { withTenantTx } from '../config/database.js';
 import { loadEnv } from '../config/env.js';
 import { requireAuth, signAppJwt } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import {
+  loginRateLimiter,
+  passwordResetRateLimiter,
+  signupRateLimiter,
+} from '../middleware/rate-limit.js';
+import {
+  applyPasswordReset,
+  findActiveUserByEmail,
+  findResetTokenByHash,
+  generateResetToken,
+  hashToken,
+  isTokenUsable,
+  resetTokenExpiry,
+  storeResetToken,
+} from '../services/password-reset.service.js';
+import { passwordResetEmail, sendEmail } from '../services/email.service.js';
 import { created, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 
 export const authRouter = Router();
+
+// One limiter instance each (their counters live in the instance's store).
+const loginLimiter = loginRateLimiter();
+const signupLimiter = signupRateLimiter();
+const passwordResetLimiter = passwordResetRateLimiter();
 
 /**
  * Bootstrap signup. Only succeeds when zero organizations exist — used to
@@ -20,6 +48,7 @@ export const authRouter = Router();
  */
 authRouter.post(
   '/signup',
+  signupLimiter,
   validateBody(signupRequestSchema),
   asyncHandler(async (req, res) => {
     const env = loadEnv();
@@ -79,6 +108,7 @@ authRouter.post(
 
 authRouter.post(
   '/login',
+  loginLimiter,
   validateBody(loginRequestSchema),
   asyncHandler(async (req, res) => {
     const row = await withTenantTx(null, async (client) => {
@@ -137,5 +167,74 @@ authRouter.get(
     );
     if (rows.length === 0) throw AppError.notFound('User');
     ok(res, rows[0]);
+  }),
+);
+
+/**
+ * Request a password reset. Always responds 200 with the same message
+ * whether or not the email exists — never reveal which addresses are
+ * registered. A valid, active user is emailed a single-use, 15-minute link.
+ */
+authRouter.post(
+  '/forgot-password',
+  passwordResetLimiter,
+  validateBody(forgotPasswordSchema),
+  asyncHandler(async (req, res) => {
+    const env = loadEnv();
+    const { email } = req.body as ForgotPasswordInput;
+
+    const user = await withTenantTx(null, (client) => findActiveUserByEmail(client, email));
+    if (user) {
+      const rawToken = generateResetToken();
+      await withTenantTx(null, (client) =>
+        storeResetToken(client, {
+          organizationId: user.organization_id,
+          userId: user.id,
+          tokenHash: hashToken(rawToken),
+          expiresAt: resetTokenExpiry(new Date()),
+        }),
+      );
+      const resetUrl = `${env.WEB_APP_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
+      await sendEmail({
+        ...passwordResetEmail({ resetUrl, firstName: user.first_name ?? undefined }),
+        to: user.email,
+      });
+    }
+
+    ok(res, { message: 'If that email is registered, a reset link is on its way.' });
+  }),
+);
+
+/**
+ * Complete a password reset (also used for invite setup — same token table).
+ * Verifies the single-use token, hashes the new password, and consumes the
+ * token. Returns a generic error on any invalid/expired/used token.
+ */
+authRouter.post(
+  '/reset-password',
+  passwordResetLimiter,
+  validateBody(resetPasswordSchema),
+  asyncHandler(async (req, res) => {
+    const env = loadEnv();
+    const { token, password } = req.body as ResetPasswordInput;
+    const tokenHash = hashToken(token);
+    const now = new Date();
+
+    const reset = await withTenantTx(null, async (client) => {
+      const row = await findResetTokenByHash(client, tokenHash);
+      if (!row || !isTokenUsable(row, now)) return false;
+      const passwordHash = await bcrypt.hash(password, env.BCRYPT_ROUNDS);
+      await applyPasswordReset(client, {
+        tokenId: row.id,
+        userId: row.user_id,
+        passwordHash,
+      });
+      return true;
+    });
+
+    if (!reset) {
+      throw AppError.validation('This reset link is invalid or has expired. Request a new one.');
+    }
+    ok(res, { message: 'Your password has been reset. You can now sign in.' });
   }),
 );

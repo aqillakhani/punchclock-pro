@@ -7,6 +7,7 @@ import {
   organizationUpdateSchema,
   shiftTradeDecisionSchema,
   timeOffDecisionSchema,
+  type InviteUserInput,
 } from '@punchclock/shared';
 import { loadEnv } from '../config/env.js';
 import { requireAuth, requirePermission, requireRole } from '../middleware/auth.js';
@@ -17,6 +18,17 @@ import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
 import { enumerateDates, materializeTimeOffShifts } from '../services/time-off.service.js';
+import {
+  generateResetToken,
+  hashToken,
+  resetTokenExpiry,
+  storeResetToken,
+} from '../services/password-reset.service.js';
+import { inviteEmail, sendEmail, timeOffDecisionEmail } from '../services/email.service.js';
+import {
+  isDocumentStorageConfigured,
+  presignDownload,
+} from '../services/document-storage.service.js';
 import {
   buildIIF,
   buildQboJson,
@@ -186,24 +198,58 @@ adminRouter.post(
     }
 
     const env = loadEnv();
-    const passwordHash = await bcrypt.hash(req.body.password, env.BCRYPT_ROUNDS);
+    const body = req.body as InviteUserInput;
+    // When the owner doesn't set a password, the worker gets a setup email
+    // and chooses their own (the owner never sees it).
+    const passwordHash = body.password ? await bcrypt.hash(body.password, env.BCRYPT_ROUNDS) : null;
 
-    const { rows } = await db.query(
+    const { rows } = await db.query<{
+      id: string;
+      email: string;
+      first_name: string | null;
+      last_name: string | null;
+      role: string;
+      status: string;
+    }>(
       `INSERT INTO users
          (organization_id, email, first_name, last_name, password_hash, role, pay_rate, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
        RETURNING id, email, first_name, last_name, role, status`,
       [
         req.user.organizationId,
-        req.body.email,
-        req.body.firstName ?? null,
-        req.body.lastName ?? null,
+        body.email,
+        body.firstName ?? null,
+        body.lastName ?? null,
         passwordHash,
-        req.body.role,
-        req.body.payRate ?? null,
+        body.role,
+        body.payRate ?? null,
       ],
     );
-    created(res, rows[0]);
+    const newUser = rows[0]!;
+
+    if (!passwordHash) {
+      const rawToken = generateResetToken();
+      await storeResetToken(db, {
+        organizationId: req.user.organizationId,
+        userId: newUser.id,
+        tokenHash: hashToken(rawToken),
+        expiresAt: resetTokenExpiry(new Date()),
+      });
+      const { rows: orgRows } = await db.query<{ name: string }>(
+        `SELECT name FROM organizations LIMIT 1`,
+      );
+      const setupUrl = `${env.WEB_APP_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
+      await sendEmail({
+        ...inviteEmail({
+          setupUrl,
+          orgName: orgRows[0]?.name ?? 'PunchClock Pro',
+          firstName: newUser.first_name ?? undefined,
+        }),
+        to: newUser.email,
+      });
+    }
+
+    created(res, newUser);
   }),
 );
 
@@ -379,12 +425,16 @@ adminRouter.post(
       start_date: string;
       end_date: string;
       status: string;
+      email: string;
+      first_name: string | null;
     }>(
-      `SELECT id, user_id,
-              to_char(start_date, 'YYYY-MM-DD') AS start_date,
-              to_char(end_date,   'YYYY-MM-DD') AS end_date,
-              status
-       FROM time_off_requests WHERE id = $1`,
+      `SELECT t.id, t.user_id,
+              to_char(t.start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(t.end_date,   'YYYY-MM-DD') AS end_date,
+              t.status, u.email, u.first_name
+       FROM time_off_requests t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = $1`,
       [requestId],
     );
     if (existing.length === 0) throw AppError.notFound('Time-off request');
@@ -416,6 +466,18 @@ adminRouter.post(
         requestId,
       });
     }
+
+    // Notify the requester of the decision (best-effort).
+    await sendEmail({
+      ...timeOffDecisionEmail({
+        decision: newStatus,
+        startDate: tor.start_date,
+        endDate: tor.end_date,
+        firstName: tor.first_name ?? undefined,
+        comment: req.body.comment ?? undefined,
+      }),
+      to: tor.email,
+    });
 
     ok(res, { ...updated[0], placeholderShifts });
   }),
@@ -556,6 +618,34 @@ adminRouter.post(
     );
     if (rows.length === 0) throw AppError.notFound('Document');
     ok(res, rows[0]);
+  }),
+);
+
+// Presign a short-lived GET URL so a manager can view a stored document.
+adminRouter.get(
+  '/documents/:id/url',
+  requirePermission(PERMISSIONS.VIEW_DOCUMENTS_OTHERS),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const { rows } = await db.query<{ storage_url: string | null }>(
+      `SELECT storage_url FROM employee_documents WHERE id = $1`,
+      [req.params.id],
+    );
+    const doc = rows[0];
+    if (!doc) throw AppError.notFound('Document');
+    if (!doc.storage_url) throw AppError.validation('This document has no stored file');
+    // Legacy stub rows stored a full public URL — return it as-is.
+    if (/^https?:\/\//i.test(doc.storage_url)) {
+      ok(res, { downloadUrl: doc.storage_url });
+      return;
+    }
+    const env = loadEnv();
+    if (!isDocumentStorageConfigured(env)) {
+      throw AppError.validation('Document storage is not configured');
+    }
+    const downloadUrl = await presignDownload(env, { key: doc.storage_url });
+    ok(res, { downloadUrl });
   }),
 );
 

@@ -50,7 +50,7 @@ export default function TeamPage() {
     mutationFn: (input: NewUserForm) =>
       apiClient.post('/api/v1/admin/users', {
         email: input.email.trim(),
-        password: input.password,
+        password: input.password || undefined,
         firstName: input.firstName.trim() || undefined,
         lastName: input.lastName.trim() || undefined,
         role: input.role,
@@ -113,16 +113,15 @@ export default function TeamPage() {
               className={inputClass}
             />
           </Field>
-          <Field label="Initial password">
+          <Field label="Initial password (optional)">
             <input
               type="text"
-              required
               minLength={8}
               autoComplete="off"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               className={inputClass}
-              placeholder="≥ 8 characters"
+              placeholder="Leave blank to email a setup link"
             />
           </Field>
           <Field label="First name">

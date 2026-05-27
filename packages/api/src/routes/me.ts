@@ -17,11 +17,13 @@ import bcrypt from 'bcrypt';
 import {
   PERMISSIONS,
   cashDrawerCountSchema,
+  documentPresignSchema,
   documentUploadSchema,
   setPinSchema,
   shiftTradePostSchema,
   timeOffRequestSchema,
   type CashDrawerCountInput,
+  type DocumentPresignInput,
   type DocumentUploadInput,
   type SetPinInput,
   type ShiftTradePostInput,
@@ -29,16 +31,27 @@ import {
 } from '@punchclock/shared';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
+import { pinRateLimiter } from '../middleware/rate-limit.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 import { loadEnv } from '../config/env.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
+import { sendEmail, timeOffSubmittedEmail } from '../services/email.service.js';
+import {
+  buildObjectKey,
+  isAllowedContentType,
+  isDocumentStorageConfigured,
+  presignUpload,
+  MAX_DOCUMENT_BYTES,
+} from '../services/document-storage.service.js';
 
 export const meRouter = Router();
 
 meRouter.use(requireAuth(), withTenantDb());
+
+const pinLimiter = pinRateLimiter();
 
 // ---- Own timesheet --------------------------------------------------
 
@@ -205,6 +218,36 @@ meRouter.post(
                  reason, status, created_at`,
       [req.user.organizationId, req.user.userId, body.startDate, body.endDate, body.reason ?? null],
     );
+
+    // Notify managers + owners (best-effort, capped at 5, fire-and-forget so
+    // the worker's submit isn't delayed by email delivery).
+    const { rows: meRows } = await db.query<{
+      first_name: string | null;
+      last_name: string | null;
+    }>(`SELECT first_name, last_name FROM users WHERE id = $1`, [req.user.userId]);
+    const workerName =
+      [meRows[0]?.first_name, meRows[0]?.last_name].filter(Boolean).join(' ').trim() ||
+      req.user.email;
+    const { rows: managers } = await db.query<{ email: string }>(
+      `SELECT email FROM users
+       WHERE role IN ('owner','manager') AND status = 'active' AND deleted_at IS NULL
+       LIMIT 5`,
+    );
+    const reviewUrl = `${loadEnv().WEB_APP_URL}/dashboard/time-off`;
+    void Promise.all(
+      managers.map((m) =>
+        sendEmail({
+          ...timeOffSubmittedEmail({
+            workerName,
+            startDate: body.startDate,
+            endDate: body.endDate,
+            reviewUrl,
+          }),
+          to: m.email,
+        }),
+      ),
+    );
+
     created(res, rows[0]);
   }),
 );
@@ -336,6 +379,7 @@ meRouter.get(
 
 meRouter.post(
   '/pin',
+  pinLimiter,
   validateBody(setPinSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -433,6 +477,39 @@ meRouter.post(
       ],
     );
     created(res, rows[0]);
+  }),
+);
+
+// Issue a short-lived presigned PUT URL so the client uploads the file
+// straight to R2. The returned objectKey is then sent back as `storageUrl`
+// on POST /documents once the upload succeeds.
+meRouter.post(
+  '/documents/presign-upload',
+  requirePermission(PERMISSIONS.UPLOAD_DOCUMENTS_OWN),
+  validateBody(documentPresignSchema),
+  asyncHandler(async (req, res) => {
+    if (!req.user) throw AppError.unauthorized();
+    const env = loadEnv();
+    if (!isDocumentStorageConfigured(env)) {
+      throw AppError.validation('Document uploads are not enabled (storage is not configured)');
+    }
+    const body = req.body as DocumentPresignInput;
+    if (!isAllowedContentType(body.contentType)) {
+      throw AppError.validation('Only JPEG, PNG, or PDF files are allowed');
+    }
+    const objectKey = buildObjectKey({
+      organizationId: req.user.organizationId,
+      userId: req.user.userId,
+      documentType: body.documentType,
+      contentType: body.contentType,
+    });
+    const uploadUrl = await presignUpload(env, { key: objectKey, contentType: body.contentType });
+    ok(res, {
+      uploadUrl,
+      objectKey,
+      maxBytes: MAX_DOCUMENT_BYTES,
+      expiresIn: env.DOCUMENTS_PRESIGN_EXPIRY_SECONDS,
+    });
   }),
 );
 
