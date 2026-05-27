@@ -253,7 +253,8 @@ export const documentTypeSchema = z.enum([
 
 export const documentUploadSchema = z.object({
   documentType: documentTypeSchema,
-  storageUrl: z.string().url().optional(),
+  // Holds either a legacy public URL or an R2 object key (from presign-upload).
+  storageUrl: z.string().min(1).max(2048).optional(),
   expiresAt: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'expiresAt must be YYYY-MM-DD')
@@ -261,6 +262,14 @@ export const documentUploadSchema = z.object({
 });
 
 export type DocumentUploadInput = z.infer<typeof documentUploadSchema>;
+
+// Request a presigned upload URL for a document file.
+export const documentPresignSchema = z.object({
+  documentType: documentTypeSchema,
+  contentType: z.string().min(1).max(128),
+});
+
+export type DocumentPresignInput = z.infer<typeof documentPresignSchema>;
 
 export const copyWeekSchema = z.object({
   fromMonday: z.string().regex(ymdRegex, 'fromMonday must be YYYY-MM-DD'),

@@ -17,11 +17,13 @@ import bcrypt from 'bcrypt';
 import {
   PERMISSIONS,
   cashDrawerCountSchema,
+  documentPresignSchema,
   documentUploadSchema,
   setPinSchema,
   shiftTradePostSchema,
   timeOffRequestSchema,
   type CashDrawerCountInput,
+  type DocumentPresignInput,
   type DocumentUploadInput,
   type SetPinInput,
   type ShiftTradePostInput,
@@ -37,6 +39,13 @@ import { AppError } from '../lib/errors.js';
 import { loadEnv } from '../config/env.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
 import { sendEmail, timeOffSubmittedEmail } from '../services/email.service.js';
+import {
+  buildObjectKey,
+  isAllowedContentType,
+  isDocumentStorageConfigured,
+  presignUpload,
+  MAX_DOCUMENT_BYTES,
+} from '../services/document-storage.service.js';
 
 export const meRouter = Router();
 
@@ -468,6 +477,39 @@ meRouter.post(
       ],
     );
     created(res, rows[0]);
+  }),
+);
+
+// Issue a short-lived presigned PUT URL so the client uploads the file
+// straight to R2. The returned objectKey is then sent back as `storageUrl`
+// on POST /documents once the upload succeeds.
+meRouter.post(
+  '/documents/presign-upload',
+  requirePermission(PERMISSIONS.UPLOAD_DOCUMENTS_OWN),
+  validateBody(documentPresignSchema),
+  asyncHandler(async (req, res) => {
+    if (!req.user) throw AppError.unauthorized();
+    const env = loadEnv();
+    if (!isDocumentStorageConfigured(env)) {
+      throw AppError.validation('Document uploads are not enabled (storage is not configured)');
+    }
+    const body = req.body as DocumentPresignInput;
+    if (!isAllowedContentType(body.contentType)) {
+      throw AppError.validation('Only JPEG, PNG, or PDF files are allowed');
+    }
+    const objectKey = buildObjectKey({
+      organizationId: req.user.organizationId,
+      userId: req.user.userId,
+      documentType: body.documentType,
+      contentType: body.contentType,
+    });
+    const uploadUrl = await presignUpload(env, { key: objectKey, contentType: body.contentType });
+    ok(res, {
+      uploadUrl,
+      objectKey,
+      maxBytes: MAX_DOCUMENT_BYTES,
+      expiresIn: env.DOCUMENTS_PRESIGN_EXPIRY_SECONDS,
+    });
   }),
 );
 

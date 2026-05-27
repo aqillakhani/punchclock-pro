@@ -26,6 +26,10 @@ import {
 } from '../services/password-reset.service.js';
 import { inviteEmail, sendEmail, timeOffDecisionEmail } from '../services/email.service.js';
 import {
+  isDocumentStorageConfigured,
+  presignDownload,
+} from '../services/document-storage.service.js';
+import {
   buildIIF,
   buildQboJson,
   loadWorkersForPeriod,
@@ -614,6 +618,34 @@ adminRouter.post(
     );
     if (rows.length === 0) throw AppError.notFound('Document');
     ok(res, rows[0]);
+  }),
+);
+
+// Presign a short-lived GET URL so a manager can view a stored document.
+adminRouter.get(
+  '/documents/:id/url',
+  requirePermission(PERMISSIONS.VIEW_DOCUMENTS_OTHERS),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db) throw AppError.unauthorized();
+    const { rows } = await db.query<{ storage_url: string | null }>(
+      `SELECT storage_url FROM employee_documents WHERE id = $1`,
+      [req.params.id],
+    );
+    const doc = rows[0];
+    if (!doc) throw AppError.notFound('Document');
+    if (!doc.storage_url) throw AppError.validation('This document has no stored file');
+    // Legacy stub rows stored a full public URL — return it as-is.
+    if (/^https?:\/\//i.test(doc.storage_url)) {
+      ok(res, { downloadUrl: doc.storage_url });
+      return;
+    }
+    const env = loadEnv();
+    if (!isDocumentStorageConfigured(env)) {
+      throw AppError.validation('Document storage is not configured');
+    }
+    const downloadUrl = await presignDownload(env, { key: doc.storage_url });
+    ok(res, { downloadUrl });
   }),
 );
 
