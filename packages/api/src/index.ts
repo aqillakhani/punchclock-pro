@@ -6,9 +6,11 @@ import { logger } from './config/logger.js';
 import { createSocketServer } from './realtime/socket.js';
 import { closePool } from './config/database.js';
 import { closeRedis } from './config/redis.js';
+import { initSentry } from './config/sentry.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
+  initSentry(env);
   const app = createApp();
   const server = http.createServer(app);
   createSocketServer(server, corsOrigins(env));

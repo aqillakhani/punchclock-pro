@@ -3,6 +3,7 @@ import { ZodError } from 'zod';
 import { ERROR_CODES, HTTP_STATUS, type ApiFailure } from '@punchclock/shared';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../config/logger.js';
+import { captureException } from '../config/sentry.js';
 
 export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   if (err instanceof AppError) {
@@ -28,6 +29,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   }
 
   logger.error({ err }, 'unhandled error');
+  captureException(err);
   const body: ApiFailure = {
     success: false,
     error: { code: ERROR_CODES.INTERNAL, message: 'Internal server error' },
