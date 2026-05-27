@@ -14,6 +14,8 @@
     "test:watch": "jest --watch",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
+    "db:seed:prod": "tsx src/db/prod-seed-cli.ts",
+    "db:prune-audit": "tsx src/db/prune-audit-logs-cli.ts",
     "clean": "rm -rf dist .turbo coverage *.tsbuildinfo"
   },
   "dependencies": {
