@@ -36,7 +36,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 to-white p-6">
+    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-brand-50 to-white p-6">
       <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
         <h1 className="mb-1 text-2xl font-bold text-brand-900">Sign in</h1>
         <p className="mb-6 text-sm text-slate-600">PunchClock Pro</p>
@@ -80,6 +80,16 @@ export default function LoginPage() {
             Bootstrap your organization
           </Link>
         </p>
+        <div className="mt-6 border-t border-slate-200 pt-4 text-center">
+          <div className="flex justify-center gap-4 text-xs text-slate-500">
+            <Link href="/terms" className="hover:text-slate-700 hover:underline">
+              Terms of Service
+            </Link>
+            <Link href="/privacy" className="hover:text-slate-700 hover:underline">
+              Privacy Policy
+            </Link>
+          </div>
+        </div>
       </div>
     </main>
   );
