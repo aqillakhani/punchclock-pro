@@ -7,10 +7,15 @@ import { requireAuth, signAppJwt } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { loginRateLimiter, signupRateLimiter } from '../middleware/rate-limit.js';
 import { created, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 
 export const authRouter = Router();
+
+// One limiter instance each (their counters live in the instance's store).
+const loginLimiter = loginRateLimiter();
+const signupLimiter = signupRateLimiter();
 
 /**
  * Bootstrap signup. Only succeeds when zero organizations exist — used to
@@ -20,6 +25,7 @@ export const authRouter = Router();
  */
 authRouter.post(
   '/signup',
+  signupLimiter,
   validateBody(signupRequestSchema),
   asyncHandler(async (req, res) => {
     const env = loadEnv();
@@ -79,6 +85,7 @@ authRouter.post(
 
 authRouter.post(
   '/login',
+  loginLimiter,
   validateBody(loginRequestSchema),
   asyncHandler(async (req, res) => {
     const row = await withTenantTx(null, async (client) => {

@@ -5,6 +5,7 @@ import { corsOrigins, loadEnv } from './config/env.js';
 import { logger } from './config/logger.js';
 import { createSocketServer } from './realtime/socket.js';
 import { closePool } from './config/database.js';
+import { closeRedis } from './config/redis.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'shutting down');
     server.close(async () => {
       await closePool();
+      await closeRedis();
       process.exit(0);
     });
     // Force exit after 10s.

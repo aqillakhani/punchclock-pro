@@ -29,6 +29,7 @@ import {
 } from '@punchclock/shared';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
+import { pinRateLimiter } from '../middleware/rate-limit.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { created, noContent, ok } from '../lib/response.js';
@@ -39,6 +40,8 @@ import { calculateOvertime, type OvertimeJurisdiction } from '../services/overti
 export const meRouter = Router();
 
 meRouter.use(requireAuth(), withTenantDb());
+
+const pinLimiter = pinRateLimiter();
 
 // ---- Own timesheet --------------------------------------------------
 
@@ -336,6 +339,7 @@ meRouter.get(
 
 meRouter.post(
   '/pin',
+  pinLimiter,
   validateBody(setPinSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
