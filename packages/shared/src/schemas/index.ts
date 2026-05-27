@@ -124,7 +124,9 @@ export const shiftCreateSchema = z.object({
 
 export const inviteUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8).max(128),
+  // Optional: when omitted, the worker is emailed a setup link to choose
+  // their own password (the owner never sees it).
+  password: z.string().min(8).max(128).optional(),
   firstName: z.string().min(1).max(100).optional(),
   lastName: z.string().min(1).max(100).optional(),
   role: roleSchema.default(ROLES.EMPLOYEE),
