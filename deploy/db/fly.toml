@@ -1,0 +1,30 @@
+# PunchClock Pro — self-hosted Postgres 16 + TimescaleDB + PostGIS.
+#
+# Internal-only: no public IP and no [http_service], so it is reachable only
+# over Fly's private network. The API connects at:
+#     postgres://punchclock:<POSTGRES_PASSWORD>@punchclock-db.internal:5432/punchclock?sslmode=require
+# For local migrations, tunnel first:
+#     flyctl proxy 15432:5432 -a punchclock-db
+#
+# POSTGRES_PASSWORD is a secret (set before the first deploy so initdb uses it):
+#     flyctl secrets set POSTGRES_PASSWORD=... -a punchclock-db
+
+app = "punchclock-db"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  POSTGRES_USER = "punchclock"
+  POSTGRES_DB = "punchclock"
+  PGDATA = "/var/lib/postgresql/data/pgdata"
+
+[mounts]
+  source = "pcp_db_data"
+  destination = "/var/lib/postgresql/data"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
