@@ -1,71 +1,119 @@
-# PunchClock Pro
+# punchclock-pro
 
-Internal-use clock-in / clock-out and workforce management platform.
-Self-hosted, no SaaS subscriptions: Postgres + Redis + Node + a single VPS.
+![CI](https://github.com/aqillakhani/punchclock-pro/actions/workflows/ci.yml/badge.svg)
 
-## Monorepo Layout
+Self-hosted workforce time-tracking platform: punch in/out with GPS, real-time team dashboard, shift scheduling, offline-first mobile, event-sourced storage. No SaaS subscriptions.
 
-```
-packages/
-├── shared/    # Shared types, Zod schemas, constants
-├── api/       # Node.js + Express backend (TypeScript)
-├── web/       # Next.js 15+ dashboard (App Router)
-└── mobile/    # React Native app (Expo Router)
-```
+**Live demo:** [CONFIRM] · **Walkthrough:** [CONFIRM]
 
-## Prerequisites
+## Problem
 
-- Node.js >= 20
-- pnpm >= 9 (`npm i -g pnpm`)
-- Docker Desktop (for local Postgres + Redis)
+Teams managing hourly workers need a self-hosted alternative to SaaS time-tracking that supports offline-first mobile punching, real-time management dashboards, geofence-validated location capture, and complex overtime calculation (federal + California) without third-party auth dependencies.
 
-## Getting Started
+## What it does
 
-```bash
-# 1. Install dependencies
-pnpm install
+- **Punch in/out with GPS** — Workers clock in via REST API with location capture; events stored as immutable records in PostgreSQL with full audit trail
+- **Automatic overtime calculation** — Federal 8/40 and California daily/weekly overtime detection; flag double-time eligibility from shift data
+- **Real-time team dashboard** — Live punch status and team view via Socket.io + Redis; see who's clocked in across the entire workforce
+- **Geofence validation** — PostGIS distance queries enforce location-based punch acceptance before events persist
+- **Offline-first mobile app** — React Native + WatermelonDB persistent queue; punches queue locally and batch-sync when connectivity returns
+- **Shift & schedule management** — CRUD shifts with conflict detection; admin-only creation; workers see assigned shifts
 
-# 2. Copy env file
-cp .env.example .env
+## Stack
 
-# 3. Start local services (Postgres + Redis)
-pnpm db:up
-
-# 4. Run migrations
-pnpm db:migrate
-
-# 5. Start dev servers
-pnpm dev
-```
-
-## Scripts
-
-| Command | Description |
-|---|---|
-| `pnpm dev` | Run all packages in dev mode |
-| `pnpm build` | Build all packages |
-| `pnpm test` | Run all tests |
-| `pnpm lint` | Lint all packages |
-| `pnpm typecheck` | Type-check all packages |
-| `pnpm db:up` | Start Postgres + Redis containers |
-| `pnpm db:down` | Stop containers |
-| `pnpm db:migrate` | Run database migrations |
+**Backend**: Node 20 / Express 4 / TypeScript | PostgreSQL 16 (TimescaleDB + PostGIS) | Redis 7 | Socket.io 4  
+**Web**: Next.js 15 / React 18 / Tailwind / React Query  
+**Mobile**: Expo / React Native / WatermelonDB  
+**Monorepo**: pnpm 9 / Turborepo  
+**Auth**: bcrypt + JWT (self-hosted, no Clerk/Auth0)  
+**Tooling**: Zod schemas, Sentry, S3-compatible document storage  
 
 ## Architecture
 
-See [lucky-spinning-pillow.md](https://file+.vscode-resource.vscode-cdn.net/C:/Users/claws/.claude/plans/lucky-spinning-pillow.md)
-for the full implementation plan.
+```
+pnpm/Turbo monorepo (4 packages):
+  shared/    → TypeScript types + Zod schemas
+  api/       → Express REST API + Socket.io server
+  web/       → Next.js dashboard (App Router)
+  mobile/    → Expo app (Expo Router)
 
-Key pillars:
-- **Event-sourced time records** — every punch is an immutable event
-- **Offline-first mobile** — WatermelonDB with 72-hour offline resilience
-- **Real-time dashboard** — Socket.io + Redis adapter
-- **Self-hosted auth** — bcrypt-hashed passwords + signed JWTs, no third-party identity provider
+Flow:
+  Mobile punch → JWT auth → Express /api/v1/time-tracking/punch-in
+    → Geofence check (PostGIS) → Event sourced to PostgreSQL
+    → Socket.io broadcast via Redis adapter
+    → Web dashboard live-updates
+    
+  Mobile offline: Punch → WatermelonDB queue → sync on reconnect
+```
 
-## Auth model
+## Run it
 
-This is an internal tool, not a SaaS. The first time you bring up the API,
-hit `POST /auth/signup` once to bootstrap the singleton organization and
-the first owner. After that, `POST /auth/signup` returns 403 — every
-subsequent user is created by an existing owner via
-`POST /api/v1/admin/users`. Workers log in with email + password.
+### Prerequisites
+
+- Node 20 LTS
+- pnpm 9 (`npm i -g pnpm`)
+- Docker Desktop
+
+### Local dev (5 min)
+
+```bash
+# Install dependencies
+pnpm install
+
+# Copy env (defaults work locally)
+cp .env.example .env
+
+# Start Postgres (TimescaleDB + PostGIS) + Redis
+pnpm db:up
+
+# Run migrations
+pnpm db:migrate
+
+# Start all dev servers in parallel
+pnpm dev
+# → Express API: http://localhost:4000
+# → Next.js dashboard: http://localhost:3000
+# → Expo dev server: ready for iOS/Android
+```
+
+### Bootstrap first user (one-time)
+
+```bash
+# POST /auth/signup only succeeds when zero organizations exist
+curl -X POST http://localhost:4000/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{
+    "organizationName": "My Business",
+    "ownerEmail": "owner@example.com",
+    "ownerPassword": "ChangeMe123!",
+    "ownerFirstName": "Acme",
+    "ownerLastName": "Owner",
+    "timezone": "America/New_York"
+  }'
+# Returns JWT token for subsequent API calls
+```
+
+### Punch in with cURL
+
+```bash
+TOKEN=<from signup response>
+curl -X POST http://localhost:4000/api/v1/time-tracking/punch-in \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"clientGeneratedId\": \"$(uuidgen)\",
+    \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+    \"location\": { \"latitude\": 40.7128, \"longitude\": -74.006, \"accuracy\": 8 }
+  }"
+```
+
+### Test & CI
+
+```bash
+pnpm test           # Unit tests (API + mobile)
+pnpm typecheck      # Full monorepo type check
+pnpm lint           # ESLint
+pnpm build          # Build all packages
+```
+
+CI runs on every push to `main` and PRs: lint, typecheck, API unit tests (with Postgres), web build.
