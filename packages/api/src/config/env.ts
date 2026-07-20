@@ -24,7 +24,17 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
-  REDIS_URL: z.string().default('redis://localhost:6379'),
+  /**
+   * Optional. When unset, Redis-backed features are simply off: Socket.io
+   * uses its in-memory adapter (correct for a single instance) and /health
+   * reports redis "disabled" rather than "down". Set it only when scaling
+   * past one API machine, where broadcasts must fan out across instances.
+   */
+  REDIS_URL: z
+    .string()
+    .min(1)
+    .refine((v) => /^rediss?:\/\//.test(v), { message: 'must be a redis:// or rediss:// URL' })
+    .optional(),
 
   JWT_SECRET: z.string().min(16).default(DEFAULT_DEV_JWT_SECRET),
   JWT_EXPIRES_IN: z.string().default('24h'),
@@ -92,6 +102,15 @@ export function productionEnvProblems(env: AppEnv): string[] {
 
   if (env.EMAIL_PROVIDER === 'resend' && !env.RESEND_API_KEY) {
     problems.push('RESEND_API_KEY is required when EMAIL_PROVIDER=resend');
+  }
+
+  // Redis is optional, but a localhost URL in production is always a mistake:
+  // it means the deploy inherited a development value and every Redis-backed
+  // feature will silently fail against a port nothing is listening on.
+  if (env.REDIS_URL && isLocalOrigin(env.REDIS_URL)) {
+    problems.push(
+      'REDIS_URL must not point at localhost in production — unset it to run single-instance, or set it to a reachable Redis',
+    );
   }
 
   return problems;

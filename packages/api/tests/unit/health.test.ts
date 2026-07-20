@@ -5,6 +5,7 @@ import {
   assembleHealth,
   healthHttpStatus,
   type ProbeState,
+  type RedisState,
 } from '../../src/routes/health.logic.js';
 import { buildHealthRouter } from '../../src/routes/health.js';
 
@@ -25,6 +26,16 @@ describe('assembleHealth()', () => {
   it('is "error" when db is down regardless of redis', () => {
     expect(assembleHealth({ version: 'v1', db: 'down', redis: 'up' }).status).toBe('error');
     expect(assembleHealth({ version: 'v1', db: 'down', redis: 'down' }).status).toBe('error');
+    expect(assembleHealth({ version: 'v1', db: 'down', redis: 'disabled' }).status).toBe('error');
+  });
+
+  it('is "ok" — not degraded — when redis is deliberately disabled', () => {
+    expect(assembleHealth({ version: 'v1', db: 'up', redis: 'disabled' })).toEqual({
+      status: 'ok',
+      version: 'v1',
+      db: 'up',
+      redis: 'disabled',
+    });
   });
 });
 
@@ -35,13 +46,14 @@ describe('healthHttpStatus()', () => {
       200,
     );
     expect(healthHttpStatus({ status: 'ok', version: 'v', db: 'up', redis: 'up' })).toBe(200);
+    expect(healthHttpStatus({ status: 'ok', version: 'v', db: 'up', redis: 'disabled' })).toBe(200);
   });
 });
 
 describe('GET /health router', () => {
   function appWith(
     probeDb: () => Promise<ProbeState>,
-    probeRedis: () => Promise<ProbeState>,
+    probeRedis: () => Promise<RedisState>,
     version = 'test-sha',
   ): express.Express {
     const app = express();
@@ -85,6 +97,18 @@ describe('GET /health router', () => {
     ).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.data.status).toBe('degraded');
+  });
+
+  it('reports 200/ok with redis "disabled" when Redis is not configured', async () => {
+    const res = await request(
+      appWith(
+        async () => 'up',
+        async () => 'disabled',
+      ),
+    ).get('/health');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data).toMatchObject({ status: 'ok', db: 'up', redis: 'disabled' });
   });
 
   it('still answers /health/live as a simple liveness probe', async () => {
