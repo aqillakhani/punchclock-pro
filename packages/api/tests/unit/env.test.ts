@@ -48,6 +48,28 @@ describe('parseEnv()', () => {
     ).toThrow(/production/i);
   });
 
+  it('leaves REDIS_URL undefined when unset — Redis is optional', () => {
+    expect(parseEnv({ ...devRaw }).REDIS_URL).toBeUndefined();
+  });
+
+  it('accepts redis:// and rediss:// URLs', () => {
+    expect(parseEnv({ ...devRaw, REDIS_URL: 'redis://localhost:6379' }).REDIS_URL).toBe(
+      'redis://localhost:6379',
+    );
+    expect(
+      parseEnv({ ...devRaw, REDIS_URL: 'rediss://user:pw@redis.example.com:6379' }).REDIS_URL,
+    ).toBe('rediss://user:pw@redis.example.com:6379');
+  });
+
+  it('rejects a REDIS_URL that is not a redis scheme', () => {
+    expect(() => parseEnv({ ...devRaw, REDIS_URL: 'http://redis.example.com' })).toThrow(
+      /REDIS_URL/i,
+    );
+    expect(() => parseEnv({ ...devRaw, REDIS_URL: 'redis.example.com:6379' })).toThrow(
+      /REDIS_URL/i,
+    );
+  });
+
   it('accepts a fully-configured production env', () => {
     expect(() =>
       parseEnv({
@@ -98,6 +120,22 @@ describe('productionEnvProblems()', () => {
       prodEnv({ EMAIL_PROVIDER: 'resend', RESEND_API_KEY: undefined }),
     );
     expect(problems.some((p) => /RESEND_API_KEY/.test(p))).toBe(true);
+  });
+
+  it('accepts an unset REDIS_URL in production (single-instance is supported)', () => {
+    expect(productionEnvProblems(prodEnv({ REDIS_URL: undefined }))).toEqual([]);
+  });
+
+  it('accepts a real remote REDIS_URL in production', () => {
+    expect(
+      productionEnvProblems(prodEnv({ REDIS_URL: 'rediss://punchclock-redis.internal:6379' })),
+    ).toEqual([]);
+  });
+
+  it('flags a localhost REDIS_URL in production — the value that shipped a dead default', () => {
+    const problems = productionEnvProblems(prodEnv({ REDIS_URL: 'redis://localhost:6379' }));
+    expect(problems.some((p) => /REDIS_URL/.test(p))).toBe(true);
+    expect(productionEnvProblems(prodEnv({ REDIS_URL: 'redis://127.0.0.1:6379' }))).toHaveLength(1);
   });
 
   it('accepts EMAIL_PROVIDER=resend when the key is present', () => {

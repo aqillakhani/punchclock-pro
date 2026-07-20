@@ -7,7 +7,7 @@ Single-tenant production deploy. Stack chosen in `docs/plans/2026-05-21-producti
 | API (Express + Socket.io) | **Fly.io** | Persistent machine, region `ord`. `packages/api/Dockerfile` + `fly.toml`. |
 | Web (Next.js) | **Vercel** | Root directory `packages/web`. Native Git integration. |
 | Postgres | **Neon** | Pooled connection; daily PITR on free tier. |
-| Redis | **Upstash** | Used for health checks today; Socket.io scale-out later. |
+| Redis | **none** | Not deployed. Only needed to fan Socket.io broadcasts across instances once the API runs on more than one machine — the adapter is already wired and activates when `REDIS_URL` is set. `/health` reports `redis: "disabled"` until then. |
 | Documents | **Cloudflare R2** | S3-compatible. Optional until document upload is enabled. |
 | Email | **Resend** | `EMAIL_PROVIDER=resend`; until then emails are logged, not sent. |
 | Errors | **Sentry** | Optional; no-op until a DSN is set. |
@@ -26,7 +26,7 @@ Create accounts and capture the secret each one produces. Drop them in a passwor
 - [ ] **Fly.io** — `flyctl auth signup`; run `flyctl auth token` for CI. → `FLY_API_TOKEN`
 - [ ] **Vercel** — sign up, install the GitHub app on this repo.
 - [ ] **Neon** — create a project. Copy the **pooled** connection string (ends with `-pooler`, append `?sslmode=require`). → `DATABASE_URL`
-- [ ] **Upstash** — create a Redis database. Copy the `rediss://` URL. → `REDIS_URL`
+- [ ] **Redis — not required.** The API runs single-instance without it (Socket.io uses its in-memory adapter; `/health` reports `redis: "disabled"`). Only when you scale past one API machine do you need one — see [Scaling past one API instance](#scaling-past-one-api-instance).
 - [ ] **Cloudflare R2** — create a bucket + an S3 API token. → `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (only needed once document upload is enabled)
 - [ ] **Resend** — verify your sending domain, create an API key. → `RESEND_API_KEY`, set `EMAIL_FROM="PunchClock Pro <noreply@punchclock.<domain>.com>"`
 - [ ] **Sentry** (optional) — create a project (Node) + a second (Next.js). → `SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_DSN`
@@ -55,7 +55,6 @@ lockfile + the shared package), so always deploy from the repo root:
 flyctl launch --no-deploy --config packages/api/fly.toml --copy-config   # first time only
 flyctl secrets set --config packages/api/fly.toml \
   DATABASE_URL="<neon-pooled-url>" \
-  REDIS_URL="<upstash-url>" \
   JWT_SECRET="<openssl-output>" \
   CORS_ALLOWED_ORIGINS="https://punchclock.<domain>.com" \
   WEB_APP_URL="https://punchclock.<domain>.com" \
@@ -72,7 +71,11 @@ flyctl deploy . --remote-only \
 > off, or a localhost CORS origin — that's the env hardening doing its job. Fix
 > the offending secret and redeploy.
 
-Verify: `curl https://<fly-app>.fly.dev/health` → `{ "status": "ok", "version": "<sha>", "db": "up", "redis": "up" }`.
+Verify: `curl https://<fly-app>.fly.dev/health` → `{ "status": "ok", "version": "<sha>", "db": "up", "redis": "disabled" }`.
+
+`redis: "disabled"` is the expected result on a single machine and does **not**
+mean something failed — see [Scaling past one API instance](#scaling-past-one-api-instance).
+It reads `"up"` only once you have set `REDIS_URL`.
 
 ### 2c. Deploy the web app to Vercel
 
@@ -153,6 +156,38 @@ Drill this once before launch: snapshot → mutate a row → restore → confirm
 - **Uptime:** point BetterStack/UptimeRobot at `https://api.punchclock.<domain>.com/health/live` and the web root, 1-minute interval, alerting **you** (not the owner).
 - **Errors:** once `SENTRY_DSN` is set, 5xx responses and unhandled rejections flow to Sentry. (Web client-side capture + source-map upload via `withSentryConfig` is a follow-up — see `packages/web/src/instrumentation.ts`.)
 - **Logs:** `flyctl logs --config packages/api/fly.toml`.
+- **`/health` semantics:** `ok` = healthy; `degraded` = database up but a *configured* Redis is unreachable; `error` = database down (503, the only status that should page you). `redis: "disabled"` is normal on a single instance and does **not** degrade the service.
+
+---
+
+## Scaling past one API instance
+
+The API runs on one Fly machine by design (`min_machines_running = 1`). At one
+machine Socket.io's in-memory adapter already reaches every connected client, so
+**no Redis is required** and `/health` reports `redis: "disabled"`.
+
+The moment there are two machines that stops being true: a broadcast emitted on
+machine A never reaches clients connected to machine B. Before scaling up:
+
+```bash
+# 1. Provision Redis reachable on Fly's private network. Either a managed
+#    provider (rediss:// URL) or an internal-only Fly app, mirroring
+#    deploy/db/fly.toml — no public IP, no [http_service].
+# 2. Point the API at it. A localhost URL is rejected at boot in production.
+flyctl secrets set --config packages/api/fly.toml REDIS_URL="rediss://<host>:6379"
+
+# 3. Confirm the adapter installed, then scale.
+flyctl logs --config packages/api/fly.toml | grep "Redis adapter"
+#   -> "Socket.io Redis adapter installed — broadcasts fan out across instances"
+curl -s https://api.punchclock.<domain>.com/health   # redis should now be "up"
+flyctl scale count 2 --config packages/api/fly.toml
+```
+
+Rate limiting stays in-memory per instance even then — a deliberate trade
+documented in `packages/api/src/middleware/rate-limit.ts`. Per-instance buckets
+mean the effective limit multiplies by the machine count; if that becomes too
+loose, add the `rate-limit-redis` package and pass a store built on a client
+from `config/redis.ts` into `createRateLimiter`.
 
 ---
 
@@ -161,4 +196,4 @@ Drill this once before launch: snapshot → mutate a row → restore → confirm
 - Document upload to R2 (set the `S3_*` vars) — wire the presigned-URL flow.
 - Sentry web client config + source-map upload (`withSentryConfig`).
 - GitHub Action for automatic Fly deploys on `main` (needs `FLY_API_TOKEN`).
-- Redis-backed rate limiting + Socket.io adapter if the API ever scales past one machine.
+- Redis-backed rate limiting, if per-instance buckets become too loose after scaling out. (The Socket.io Redis adapter is already wired — see [Scaling past one API instance](#scaling-past-one-api-instance).)

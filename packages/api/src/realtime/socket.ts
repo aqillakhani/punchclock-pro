@@ -11,9 +11,10 @@ let io: Server | null = null;
  * the `Authorization` header). Authenticated sockets are joined to
  * `org:<id>` (broadcast room) and `user:<id>` (direct messages).
  *
- * In production the Redis adapter should be installed so broadcasts
- * fan out across multiple API instances — that wiring lives in
- * `index.ts` and is conditional on REDIS_URL being set.
+ * The returned server uses Socket.io's in-memory adapter. To fan broadcasts
+ * out across multiple API instances, pass it to `attachRedisAdapter()`
+ * (`realtime/redis-adapter.ts`), which upgrades it in place when REDIS_URL
+ * is configured. `index.ts` does exactly that at startup.
  */
 export function createSocketServer(httpServer: http.Server, corsOrigins: string[]): Server {
   io = new Server(httpServer, {

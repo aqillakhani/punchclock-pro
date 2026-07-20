@@ -8,8 +8,13 @@ import type { Request } from 'express';
  * a single API instance (the target deployment). It deliberately avoids a
  * Redis-backed store: a Redis outage with a Redis store would make /auth/login
  * return 500s — locking everyone out — which is a worse failure than a counter
- * that resets on restart. To scale past one instance, pass a `rate-limit-redis`
- * store (backed by `getRedis()`) into `createRateLimiter`.
+ * that resets on restart.
+ *
+ * Running more than one instance makes these buckets per-instance, so the
+ * effective limit multiplies by the machine count. If that becomes too loose,
+ * install `rate-limit-redis` and pass a store built on a client from
+ * `config/redis.ts` into `createRateLimiter`. See "Scaling past one API
+ * instance" in docs/deploy.md.
  */
 
 const MINUTE = 60_000;
