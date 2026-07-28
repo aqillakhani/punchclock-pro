@@ -1,8 +1,16 @@
 # Critical: RLS was bypassed in production (tenant isolation)
 
-**Status:** fixed in code on `feat/time-corrections`; **production still needs the rollout below.**
+**Status: RESOLVED in production on 2026-07-28.** `punchclock-api` now connects as
+`punchclock_app` (`rolsuper=f`, `rolbypassrls=f`), verified end to end — see
+[Rollout record](#rollout-record-2026-07-28) below. The code fix is on `feat/time-corrections` (PR #3).
+
 **Severity:** critical — cross-tenant data exposure.
 **Found:** 2026-07-28, by an integration test that seeds two organizations and asserts neither can see the other.
+
+**Actual exposure: none.** The production database held exactly **one organization** at the
+time of the fix, so there was no second tenant for data to leak to. The vulnerability was
+real and would have been exploited by the first additional customer; it was closed before
+that happened. No data audit is required.
 
 ## What was wrong
 
@@ -90,7 +98,34 @@ curl -s https://punchclock-api.fly.dev/health     # {"status":"ok","db":"up",...
 ### Rollback
 
 Set `DATABASE_URL` back to the `punchclock` owner role and redeploy. That restores the
-previous behaviour — including the vulnerability — so treat it as a last resort.
+previous behaviour — including the vulnerability — so treat it as a last resort. The prior
+value is kept as `DATABASE_URL_INTERNAL` in `~/pcp-deploy-secrets.env`.
+
+## Rollout record (2026-07-28)
+
+Applied to production against the deployed image `1b966c7`. Migration 007 was **not** applied —
+the role fix does not need it, and it belongs with the PR #3 deploy.
+
+Pre-flight checks, all of which had to pass before the secret was touched:
+
+| Check | Result |
+| --- | --- |
+| API runs migrations at boot or via `release_command`? | No — neither. The app only does DML, so a role without DDL is safe. |
+| Auth flows survive the restricted role? | 13 integration tests added (`tests/integration/auth-under-rls.test.ts`). Login, forgot/reset password and invite all rely on the `app.bypass_rls` opt-out, which is a GUC and not a role privilege. |
+| Role attributes | `rolsuper=f, rolbypassrls=f, rolcreatedb=f, rolcreaterole=f` |
+| Grants | SELECT/INSERT/UPDATE/DELETE on all 20 tables |
+| RLS actually enforcing | 0 users visible with no org context; 2 with the org context the app sets; 2 via the bypass path |
+
+Post-swap verification against `https://punchclock-api.fly.dev`:
+
+- `/health` → `{"status":"ok","db":"up"}`
+- A **real login** succeeded and returned a working token — proving the bypass path still
+  resolves a user across organizations. A 401 on bogus credentials proves nothing here,
+  because a broken RLS setup returns the same 401; a successful login is the only
+  meaningful signal. A temporary user was created for this and deleted immediately after.
+- `/auth/me` with that token returned the right record — proving the tenant-scoped read
+  path works under `app.current_org_id`.
+- Row counts unchanged afterwards: 1 organization, 2 users, 2 time entries.
 
 ## Follow-up worth doing
 
