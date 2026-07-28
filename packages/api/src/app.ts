@@ -13,6 +13,7 @@ import { schedulingRouter } from './routes/scheduling.js';
 import { adminRouter } from './routes/admin.js';
 import { meRouter } from './routes/me.js';
 import { syncRouter } from './routes/sync.js';
+import { adminCorrectionsRouter, meCorrectionsRouter } from './routes/corrections.js';
 
 export function createApp(): Express {
   const env = loadEnv();
@@ -32,6 +33,11 @@ export function createApp(): Express {
   app.use('/api/v1/time-tracking', timeTrackingRouter);
   app.use('/api/v1/geofence/locations', geofenceRouter);
   app.use('/api/v1/scheduling', schedulingRouter);
+  // Correction routers mount ahead of the broad /me and /admin routers
+  // so their paths resolve first; both live in one file because they
+  // are two halves of a single workflow.
+  app.use('/api/v1/me/corrections', meCorrectionsRouter);
+  app.use('/api/v1/admin', adminCorrectionsRouter);
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/me', meRouter);
   app.use('/api/v1/sync', syncRouter);

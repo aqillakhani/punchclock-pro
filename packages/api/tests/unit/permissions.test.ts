@@ -40,6 +40,32 @@ const EXPECTED_MATRIX: Record<Action, Record<Role, boolean>> = {
     employee: false,
     viewer: false,
   },
+  // Corrections: workers may ask, managers/owners may decide. Only
+  // managers and owners can change a time record without a request.
+  [PERMISSIONS.VIEW_TIME_CORRECTION]: {
+    owner: true,
+    manager: true,
+    employee: true,
+    viewer: false,
+  },
+  [PERMISSIONS.SUBMIT_TIME_CORRECTION]: {
+    owner: true,
+    manager: true,
+    employee: true,
+    viewer: false,
+  },
+  [PERMISSIONS.APPROVE_TIME_CORRECTION]: {
+    owner: true,
+    manager: true,
+    employee: false,
+    viewer: false,
+  },
+  [PERMISSIONS.EDIT_TIME_ENTRY]: {
+    owner: true,
+    manager: true,
+    employee: false,
+    viewer: false,
+  },
   [PERMISSIONS.VIEW_TRADES]: { owner: true, manager: true, employee: true, viewer: false },
   [PERMISSIONS.POST_TRADE]: { owner: true, manager: true, employee: true, viewer: false },
   [PERMISSIONS.ACCEPT_TRADE]: { owner: true, manager: true, employee: true, viewer: false },

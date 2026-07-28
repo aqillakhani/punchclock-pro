@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getPool, withTenantTx, closePool } from '../config/database.js';
 import { logger } from '../config/logger.js';
+import { useOwnerConnection } from './owner-connection.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, 'migrations');
@@ -52,6 +53,8 @@ export async function migrate(): Promise<void> {
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 if (isMain) {
+  // DDL needs the schema owner, not the least-privilege app role.
+  useOwnerConnection();
   migrate()
     .then(() => closePool())
     .then(() => process.exit(0))

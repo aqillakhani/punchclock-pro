@@ -1,5 +1,7 @@
 import type {
   BreakType,
+  CorrectionRequestType,
+  CorrectionStatus,
   EventType,
   GeofenceEnforcement,
   Role,
@@ -69,7 +71,12 @@ export interface TimeEntry {
   punchOutLocation?: GeoPoint | null;
   punchInGeofenceId?: UUID | null;
   punchOutGeofenceId?: UUID | null;
+  /** PAYABLE minutes — gross less unpaid breaks. What payroll pays. */
   durationMinutes?: number | null;
+  /** Wall-clock minutes between the punches, before break deduction. */
+  grossMinutes?: number | null;
+  /** Completed lunch/unpaid break minutes. Paid rest breaks excluded. */
+  unpaidBreakMinutes: number;
   status: TimeEntryStatus;
   notes?: string | null;
   deviceInfo?: DeviceInfo | null;
@@ -87,6 +94,36 @@ export interface TimeEntryEvent {
   clientGeneratedId?: string | null;
   recordedAt: ISOTimestamp;
   createdAt: ISOTimestamp;
+}
+
+/**
+ * A worker's request to change a time record after the fact.
+ *
+ * Approving one never rewrites the immutable event log — it appends an
+ * `entry_edited` event and updates the projection, so the originally
+ * punched times remain recoverable.
+ */
+export interface TimeCorrectionRequest {
+  id: UUID;
+  organizationId: UUID;
+  /** Whose time record this concerns. */
+  userId: UUID;
+  /** Who filed it — usually the same person, but a manager may file for a worker. */
+  requestedBy: UUID;
+  timeEntryId?: UUID | null;
+  requestType: CorrectionRequestType;
+  originalPunchInAt?: ISOTimestamp | null;
+  originalPunchOutAt?: ISOTimestamp | null;
+  requestedPunchInAt?: ISOTimestamp | null;
+  requestedPunchOutAt?: ISOTimestamp | null;
+  reason: string;
+  status: CorrectionStatus;
+  decidedBy?: UUID | null;
+  decidedAt?: ISOTimestamp | null;
+  decisionNote?: string | null;
+  appliedEntryId?: UUID | null;
+  createdAt: ISOTimestamp;
+  updatedAt: ISOTimestamp;
 }
 
 export interface Break {

@@ -54,3 +54,9 @@ expo-env.d.ts
 *.pem
 *.key
 secrets/
+
+.vercel
+
+# E2E run artifacts — the scripts regenerate these on every run.
+tools/e2e-*.png
+tools/prod-e2e-*.png

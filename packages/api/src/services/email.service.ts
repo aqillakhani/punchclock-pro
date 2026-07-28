@@ -126,6 +126,65 @@ export function timeOffSubmittedEmail(opts: {
   return { to: '', subject, html, text };
 }
 
+/**
+ * A worker (or their manager) filed a time correction. Sent to whoever
+ * can approve it. The shift date and the size of the change are in the
+ * body so an approver can triage from the inbox.
+ */
+export function correctionSubmittedEmail(opts: {
+  workerName: string;
+  shiftLabel: string;
+  changeLabel: string;
+  reason: string;
+  reviewUrl: string;
+}): EmailMessage {
+  const subject = `Time correction request from ${opts.workerName}`;
+  const text = [
+    `${opts.workerName} asked to correct their time for ${opts.shiftLabel}.`,
+    '',
+    `Change: ${opts.changeLabel}`,
+    `Reason: ${opts.reason}`,
+    '',
+    `Review it here: ${opts.reviewUrl}`,
+  ].join('\n');
+  const html = wrapHtml('Time correction request', [
+    `${opts.workerName} asked to correct their time for <strong>${opts.shiftLabel}</strong>.`,
+    `Change: <strong>${opts.changeLabel}</strong>`,
+    `Reason: ${opts.reason}`,
+    `<a href="${opts.reviewUrl}">Review the request</a>`,
+  ]);
+  return { to: '', subject, html, text };
+}
+
+/** The verdict, sent back to the worker whose time it was. */
+export function correctionDecisionEmail(opts: {
+  decision: 'approved' | 'rejected';
+  shiftLabel: string;
+  changeLabel: string;
+  firstName?: string;
+  note?: string;
+}): EmailMessage {
+  const verb = opts.decision === 'approved' ? 'approved' : 'rejected';
+  const subject = `Your time correction was ${verb}`;
+  const lines = [
+    greeting(opts.firstName),
+    '',
+    `Your correction request for ${opts.shiftLabel} was ${verb}.`,
+  ];
+  if (opts.decision === 'approved') lines.push('', `Applied change: ${opts.changeLabel}`);
+  if (opts.note) lines.push('', `Note from your manager: ${opts.note}`);
+  const text = lines.join('\n');
+  const html = wrapHtml(`Time correction ${verb}`, [
+    greeting(opts.firstName),
+    `Your correction request for <strong>${opts.shiftLabel}</strong> was ${verb}.`,
+    ...(opts.decision === 'approved'
+      ? [`Applied change: <strong>${opts.changeLabel}</strong>`]
+      : []),
+    ...(opts.note ? [`Note from your manager: ${opts.note}`] : []),
+  ]);
+  return { to: '', subject, html, text };
+}
+
 // ---- Transports ------------------------------------------------------
 
 class LogEmailTransport implements EmailTransport {

@@ -67,6 +67,8 @@ describe('isDocumentStorageConfigured()', () => {
 });
 
 describe('presignUpload()', () => {
+  // The first call pays for lazily loading and initialising the AWS SDK
+  // signer, which can exceed Jest's 5s default on a cold cache.
   it('returns a signed URL containing the object key', async () => {
     const url = await presignUpload(configuredEnv, {
       key: 'org/o/user/u/i9/abc.pdf',
@@ -75,7 +77,7 @@ describe('presignUpload()', () => {
     expect(url).toMatch(/^https:\/\//);
     expect(url).toContain('org/o/user/u/i9/abc.pdf');
     expect(url).toContain('X-Amz-Signature');
-  });
+  }, 30_000);
 
   it('throws when storage is not configured', async () => {
     await expect(

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   BREAK_TYPES,
+  CORRECTION_REQUEST_TYPES,
   EVENT_TYPES,
   GEOFENCE_ENFORCEMENT,
   ROLES,
@@ -229,6 +230,166 @@ export const shiftTradePostSchema = z.object({
 export const shiftTradeDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
 });
+
+// ---- Time correction requests ----
+
+export const correctionRequestTypeSchema = z.enum([
+  CORRECTION_REQUEST_TYPES.EDIT_TIMES,
+  CORRECTION_REQUEST_TYPES.ADD_ENTRY,
+  CORRECTION_REQUEST_TYPES.DELETE_ENTRY,
+]);
+
+/**
+ * A worker asking to fix a punch. The reason is mandatory — every
+ * comparable product requires one, and a wage-and-hour audit needs to
+ * see why a time record moved.
+ *
+ * Shape by request type:
+ *   edit_times   → timeEntryId + at least one requested time
+ *   add_entry    → no timeEntryId, both requested times
+ *   delete_entry → timeEntryId only
+ */
+export const correctionRequestSchema = z
+  .object({
+    requestType: correctionRequestTypeSchema,
+    timeEntryId: uuidSchema.optional(),
+    requestedPunchInAt: isoTimestampSchema.optional(),
+    requestedPunchOutAt: isoTimestampSchema.optional(),
+    reason: z.string().trim().min(1, 'Tell your manager what went wrong').max(1000),
+  })
+  .superRefine((v, ctx) => {
+    const needsEntry = v.requestType !== CORRECTION_REQUEST_TYPES.ADD_ENTRY;
+    if (needsEntry && !v.timeEntryId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'timeEntryId is required for this request type',
+        path: ['timeEntryId'],
+      });
+    }
+    if (!needsEntry && v.timeEntryId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'timeEntryId must be omitted when adding a missing shift',
+        path: ['timeEntryId'],
+      });
+    }
+    if (v.requestType === CORRECTION_REQUEST_TYPES.ADD_ENTRY) {
+      if (!v.requestedPunchInAt || !v.requestedPunchOutAt) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'A missing shift needs both a start and an end time',
+          path: ['requestedPunchOutAt'],
+        });
+      }
+    }
+    if (v.requestType === CORRECTION_REQUEST_TYPES.EDIT_TIMES) {
+      if (!v.requestedPunchInAt && !v.requestedPunchOutAt) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Change at least one of the start or end time',
+          path: ['requestedPunchInAt'],
+        });
+      }
+    }
+    if (v.requestType === CORRECTION_REQUEST_TYPES.DELETE_ENTRY) {
+      if (v.requestedPunchInAt || v.requestedPunchOutAt) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'A delete request cannot carry replacement times',
+          path: ['requestedPunchInAt'],
+        });
+      }
+    }
+    if (
+      v.requestedPunchInAt &&
+      v.requestedPunchOutAt &&
+      new Date(v.requestedPunchOutAt) <= new Date(v.requestedPunchInAt)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'The end time must be after the start time',
+        path: ['requestedPunchOutAt'],
+      });
+    }
+  });
+
+/**
+ * An approver's verdict. `approved` may carry adjusted times — the
+ * "approve with modification" flow every competitor offers, so a
+ * manager can accept the spirit of a request without accepting a
+ * time they know to be wrong.
+ */
+export const correctionDecisionSchema = z
+  .object({
+    decision: z.enum(['approved', 'rejected']),
+    note: z.string().trim().max(1000).optional(),
+    overridePunchInAt: isoTimestampSchema.optional(),
+    overridePunchOutAt: isoTimestampSchema.optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.decision === 'rejected' && (v.overridePunchInAt || v.overridePunchOutAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'A rejection cannot carry override times',
+        path: ['overridePunchInAt'],
+      });
+    }
+    if (
+      v.overridePunchInAt &&
+      v.overridePunchOutAt &&
+      new Date(v.overridePunchOutAt) <= new Date(v.overridePunchInAt)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'The end time must be after the start time',
+        path: ['overridePunchOutAt'],
+      });
+    }
+  });
+
+/** Manager/owner editing a time entry directly, without a request. */
+export const timeEntryUpdateSchema = z
+  .object({
+    punchInAt: isoTimestampSchema.optional(),
+    punchOutAt: isoTimestampSchema.optional(),
+    notes: z.string().max(1024).optional(),
+    reason: z.string().trim().min(1, 'A reason is required for a manual edit').max(1000),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.punchInAt && !v.punchOutAt && v.notes === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Nothing to change',
+        path: ['punchInAt'],
+      });
+    }
+    if (v.punchInAt && v.punchOutAt && new Date(v.punchOutAt) <= new Date(v.punchInAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'The end time must be after the start time',
+        path: ['punchOutAt'],
+      });
+    }
+  });
+
+/** Manager/owner creating a time entry from scratch. */
+export const timeEntryCreateSchema = z
+  .object({
+    userId: uuidSchema,
+    punchInAt: isoTimestampSchema,
+    punchOutAt: isoTimestampSchema.optional(),
+    notes: z.string().max(1024).optional(),
+    reason: z.string().trim().min(1, 'A reason is required for a manual entry').max(1000),
+  })
+  .refine((v) => !v.punchOutAt || new Date(v.punchOutAt) > new Date(v.punchInAt), {
+    message: 'The end time must be after the start time',
+    path: ['punchOutAt'],
+  });
+
+export type CorrectionRequestInput = z.infer<typeof correctionRequestSchema>;
+export type CorrectionDecisionInput = z.infer<typeof correctionDecisionSchema>;
+export type TimeEntryUpdateInput = z.infer<typeof timeEntryUpdateSchema>;
+export type TimeEntryCreateInput = z.infer<typeof timeEntryCreateSchema>;
 
 // ---- Cash drawer + documents (Phase D) ----
 
