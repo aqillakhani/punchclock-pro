@@ -18,13 +18,20 @@ import { created, noContent, ok } from '../lib/response.js';
 import { AppError } from '../lib/errors.js';
 import { calculateOvertime, type OvertimeJurisdiction } from '../services/overtime.service.js';
 import { enumerateDates, materializeTimeOffShifts } from '../services/time-off.service.js';
+import type { PoolClient } from 'pg';
 import {
   generateResetToken,
   hashToken,
-  resetTokenExpiry,
+  inviteTokenExpiry,
   storeResetToken,
 } from '../services/password-reset.service.js';
-import { inviteEmail, sendEmail, timeOffDecisionEmail } from '../services/email.service.js';
+import {
+  inviteEmail,
+  isEmailDeliveryConfigured,
+  sendEmail,
+  timeOffDecisionEmail,
+} from '../services/email.service.js';
+import { logger } from '../config/logger.js';
 import {
   isDocumentStorageConfigured,
   presignDownload,
@@ -127,8 +134,12 @@ adminRouter.get(
   asyncHandler(async (_req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();
+    // `has_password` (never the hash) so the Team screen can show who is
+    // still waiting on a setup link and offer to re-issue one.
     const { rows } = await db.query(
-      `SELECT id, email, phone, first_name, last_name, role, pay_rate, status, last_login_at, created_at
+      `SELECT id, email, phone, first_name, last_name, role, pay_rate, status,
+              last_login_at, created_at,
+              (password_hash IS NOT NULL) AS has_password
        FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC`,
     );
     ok(res, rows);
@@ -228,30 +239,133 @@ adminRouter.post(
     const newUser = rows[0]!;
 
     if (!passwordHash) {
-      const rawToken = generateResetToken();
-      await storeResetToken(db, {
+      const invite = await issueInvite(db, {
         organizationId: req.user.organizationId,
         userId: newUser.id,
-        tokenHash: hashToken(rawToken),
-        expiresAt: resetTokenExpiry(new Date()),
+        email: newUser.email,
+        firstName: newUser.first_name,
       });
-      const { rows: orgRows } = await db.query<{ name: string }>(
-        `SELECT name FROM organizations LIMIT 1`,
-      );
-      const setupUrl = `${env.WEB_APP_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
-      await sendEmail({
-        ...inviteEmail({
-          setupUrl,
-          orgName: orgRows[0]?.name ?? 'PunchClock Pro',
-          firstName: newUser.first_name ?? undefined,
-        }),
-        to: newUser.email,
-      });
+      created(res, { ...newUser, ...invite });
+      return;
     }
 
-    created(res, newUser);
+    created(res, { ...newUser, setupUrl: null, emailDelivered: false, inviteExpiresAt: null });
   }),
 );
+
+/**
+ * Re-issue a setup link for someone who still has no password.
+ *
+ * Needed because invite links expire, and because when email delivery
+ * isn't configured the first link is only ever seen in the API response —
+ * if the owner loses it, the worker is stranded with no way back in.
+ */
+adminRouter.post(
+  '/users/:id/invite',
+  requirePermission(PERMISSIONS.INVITE_USER),
+  asyncHandler(async (req, res) => {
+    const db = res.locals.db;
+    if (!db || !req.user) throw AppError.unauthorized();
+    const userId = req.params.id;
+    if (!userId) throw AppError.validation('user id required');
+
+    const { rows } = await db.query<{
+      id: string;
+      email: string;
+      first_name: string | null;
+      role: string;
+      password_hash: string | null;
+      status: string;
+    }>(
+      `SELECT id, email, first_name, role, password_hash, status
+       FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [userId],
+    );
+    const user = rows[0];
+    if (!user) throw AppError.notFound('User');
+    if (user.status !== 'active') {
+      throw AppError.validation('That user is not active');
+    }
+    // Re-inviting somebody who already has a password would let an owner
+    // hand out a link that silently overwrites a working credential.
+    // Password *reset* is the right tool for that, and the worker starts it.
+    if (user.password_hash) {
+      throw AppError.conflict(
+        'That user already has a password. They can use "Forgot password" to change it.',
+      );
+    }
+    if (req.user.role === ROLES.MANAGER && user.role !== ROLES.EMPLOYEE) {
+      throw AppError.forbidden('Managers may only invite users with role=employee');
+    }
+
+    const invite = await issueInvite(db, {
+      organizationId: req.user.organizationId,
+      userId: user.id,
+      email: user.email,
+      firstName: user.first_name,
+    });
+    ok(res, { id: user.id, email: user.email, ...invite });
+  }),
+);
+
+interface IssuedInvite {
+  /** The link the worker opens to choose a password. */
+  setupUrl: string;
+  /** False when mail is not configured — the caller must relay the link. */
+  emailDelivered: boolean;
+  inviteExpiresAt: string;
+}
+
+/**
+ * Mint a setup token, try to email it, and always hand the link back to
+ * the caller.
+ *
+ * Returning the URL is deliberate. `sendEmail` is best-effort and the log
+ * transport "succeeds" without sending anything, so an owner on an
+ * install without SMTP configured had no way to onboard anyone — the
+ * worker simply never received a link and the token expired. The endpoint
+ * is owner/manager-only and they have just created (or already control)
+ * the account, so surfacing it to them grants nothing they did not have.
+ */
+async function issueInvite(
+  db: PoolClient,
+  args: { organizationId: string; userId: string; email: string; firstName: string | null },
+): Promise<IssuedInvite> {
+  const env = loadEnv();
+  const rawToken = generateResetToken();
+  const expiresAt = inviteTokenExpiry(new Date());
+
+  await storeResetToken(db, {
+    organizationId: args.organizationId,
+    userId: args.userId,
+    tokenHash: hashToken(rawToken),
+    expiresAt,
+  });
+
+  const { rows: orgRows } = await db.query<{ name: string }>(
+    `SELECT name FROM organizations LIMIT 1`,
+  );
+  const setupUrl = `${env.WEB_APP_URL}/reset-password?token=${encodeURIComponent(rawToken)}`;
+
+  const emailDelivered = isEmailDeliveryConfigured(env);
+  if (emailDelivered) {
+    await sendEmail({
+      ...inviteEmail({
+        setupUrl,
+        orgName: orgRows[0]?.name ?? 'PunchClock Pro',
+        firstName: args.firstName ?? undefined,
+      }),
+      to: args.email,
+    });
+  } else {
+    logger.warn(
+      { email: args.email },
+      'invite created but email delivery is not configured — the setup link is returned to the caller instead',
+    );
+  }
+
+  return { setupUrl, emailDelivered, inviteExpiresAt: expiresAt.toISOString() };
+}
 
 adminRouter.post(
   '/users/:id/reset-pin',

@@ -18,8 +18,26 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-export function resetTokenExpiry(now: Date, ttlMinutes = 15): Date {
+/**
+ * A password *reset* is requested by someone sitting at their inbox, so a
+ * short window is right — it limits how long a stolen link is useful.
+ */
+export const RESET_TOKEN_TTL_MINUTES = 15;
+
+/**
+ * An *invite* is different: the owner adds staff whenever it suits them,
+ * and the worker may not read email until their next shift. Fifteen
+ * minutes made invite links dead on arrival in practice — a week matches
+ * what comparable products do and is still far from indefinite.
+ */
+export const INVITE_TOKEN_TTL_MINUTES = 7 * 24 * 60;
+
+export function resetTokenExpiry(now: Date, ttlMinutes = RESET_TOKEN_TTL_MINUTES): Date {
   return new Date(now.getTime() + ttlMinutes * 60_000);
+}
+
+export function inviteTokenExpiry(now: Date): Date {
+  return resetTokenExpiry(now, INVITE_TOKEN_TTL_MINUTES);
 }
 
 export function isTokenUsable(

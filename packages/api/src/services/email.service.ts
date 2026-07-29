@@ -235,6 +235,19 @@ export function createEmailTransport(env: AppEnv): EmailTransport {
   return new LogEmailTransport();
 }
 
+/**
+ * True when mail will actually leave the building.
+ *
+ * Callers need this because `sendEmail` is best-effort and the log
+ * transport "succeeds" without delivering anything. Anything that hands a
+ * user a link by email — invites above all — has to be able to tell the
+ * operator "this was not sent, here is the link" rather than implying a
+ * message is on its way.
+ */
+export function isEmailDeliveryConfigured(env: AppEnv = loadEnv()): boolean {
+  return env.EMAIL_PROVIDER === 'resend' && !!env.RESEND_API_KEY;
+}
+
 let defaultTransport: EmailTransport | null = null;
 function getDefaultTransport(): EmailTransport {
   if (!defaultTransport) defaultTransport = createEmailTransport(loadEnv());
