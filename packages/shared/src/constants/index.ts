@@ -51,6 +51,50 @@ export const TIME_ENTRY_STATUS = {
 
 export type TimeEntryStatus = (typeof TIME_ENTRY_STATUS)[keyof typeof TIME_ENTRY_STATUS];
 
+/**
+ * Break types that are *unpaid* and therefore deducted from payable
+ * minutes. Short rest breaks ('standard') stay paid — under the FLSA
+ * rest periods of ~20 minutes or less are compensable hours worked.
+ *
+ * Single source of truth: the SQL in 007_time_corrections.sql and
+ * `loadUnpaidBreakMinutes()` must agree with this list.
+ */
+export const UNPAID_BREAK_TYPES: readonly BreakType[] = [BREAK_TYPES.LUNCH, BREAK_TYPES.UNPAID];
+
+export function isUnpaidBreak(breakType: BreakType): boolean {
+  return UNPAID_BREAK_TYPES.includes(breakType);
+}
+
+// ---- Time correction requests --------------------------------------
+
+export const CORRECTION_REQUEST_TYPES = {
+  /** Fix the in and/or out time on an entry that already exists. */
+  EDIT_TIMES: 'edit_times',
+  /** A shift that was never punched at all (forgot to clock in). */
+  ADD_ENTRY: 'add_entry',
+  /** Remove a duplicate or bogus entry. */
+  DELETE_ENTRY: 'delete_entry',
+} as const;
+
+export type CorrectionRequestType =
+  (typeof CORRECTION_REQUEST_TYPES)[keyof typeof CORRECTION_REQUEST_TYPES];
+
+export const CORRECTION_STATUS = {
+  PENDING: 'pending',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  CANCELLED: 'cancelled',
+} as const;
+
+export type CorrectionStatus = (typeof CORRECTION_STATUS)[keyof typeof CORRECTION_STATUS];
+
+/**
+ * How far back a worker may file a correction. Beyond this the record
+ * is presumed settled (payroll has run) and a manager must make the
+ * change directly, leaving their own name on the audit trail.
+ */
+export const CORRECTION_MAX_AGE_DAYS = 60;
+
 export const OVERTIME_RULES = {
   FEDERAL_WEEKLY_THRESHOLD: 40,
   FEDERAL_OT_MULTIPLIER: 1.5,

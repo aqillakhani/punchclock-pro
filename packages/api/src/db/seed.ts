@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import { getPool, closePool } from '../config/database.js';
 import { loadEnv } from '../config/env.js';
 import { logger } from '../config/logger.js';
+import { useOwnerConnection } from './owner-connection.js';
 
 const STORE = {
   name: 'Quick Stop #4',
@@ -697,6 +698,8 @@ function randInt(min: number, max: number): number {
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 if (isMain) {
+  // Seeding writes across organizations; run as the schema owner.
+  useOwnerConnection();
   seed()
     .then(() => closePool())
     .then(() => process.exit(0))

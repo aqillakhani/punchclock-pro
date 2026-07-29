@@ -15,6 +15,18 @@ interface ApiUser {
   status: 'active' | 'inactive' | 'archived';
   last_login_at: string | null;
   created_at: string;
+  has_password: boolean;
+}
+
+/** What the API returns after creating a user or re-issuing an invite. */
+interface InviteResult {
+  id: string;
+  email: string;
+  /** Null when the owner set a password directly — there is nothing to send. */
+  setupUrl: string | null;
+  /** False when mail is not configured, so the owner has to relay the link. */
+  emailDelivered: boolean;
+  inviteExpiresAt: string | null;
 }
 
 interface NewUserForm {
@@ -40,14 +52,16 @@ export default function TeamPage() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
+  const [invite, setInvite] = useState<InviteResult | null>(null);
+  const [pendingArchive, setPendingArchive] = useState<ApiUser | null>(null);
 
   const users = useQuery<ApiUser[]>({
     queryKey: ['admin', 'users'],
     queryFn: () => apiClient.get('/api/v1/admin/users'),
   });
 
-  const createUser = useMutation({
-    mutationFn: (input: NewUserForm) =>
+  const createUser = useMutation<InviteResult, Error, NewUserForm>({
+    mutationFn: (input) =>
       apiClient.post('/api/v1/admin/users', {
         email: input.email.trim(),
         password: input.password || undefined,
@@ -56,10 +70,22 @@ export default function TeamPage() {
         role: input.role,
         payRate: input.payRate ? Number(input.payRate) : undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: ['admin', 'users'] });
       setForm(EMPTY_FORM);
       setShowForm(false);
+      setFormError(null);
+      // Only worth showing when there is a link to hand over.
+      setInvite(result.setupUrl ? result : null);
+    },
+    onError: (err: Error) => setFormError(err.message),
+  });
+
+  const reissueInvite = useMutation<InviteResult, Error, string>({
+    mutationFn: (id) => apiClient.post(`/api/v1/admin/users/${id}/invite`, {}),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      setInvite(result);
       setFormError(null);
     },
     onError: (err: Error) => setFormError(err.message),
@@ -67,19 +93,16 @@ export default function TeamPage() {
 
   const archiveUser = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/api/v1/admin/users/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'users'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'users'] });
+      setPendingArchive(null);
+    },
   });
 
   function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
     createUser.mutate(form);
-  }
-
-  function onArchive(user: ApiUser) {
-    const label = displayName(user);
-    if (!confirm(`Archive ${label}? They will no longer be able to sign in.`)) return;
-    archiveUser.mutate(user.id);
   }
 
   return (
@@ -97,6 +120,34 @@ export default function TeamPage() {
           {showForm ? 'Cancel' : 'Add user'}
         </button>
       </div>
+
+      {invite?.setupUrl && <SetupLinkPanel invite={invite} onDismiss={() => setInvite(null)} />}
+
+      {pendingArchive && (
+        <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm text-amber-900">
+            Archive <strong>{displayName(pendingArchive)}</strong>? They will no longer be able to
+            sign in. Their time records are kept.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              disabled={archiveUser.isPending}
+              onClick={() => archiveUser.mutate(pendingArchive.id)}
+              className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {archiveUser.isPending ? 'Archiving…' : 'Archive'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingArchive(null)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {showForm && (
         <form
@@ -121,8 +172,12 @@ export default function TeamPage() {
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
               className={inputClass}
-              placeholder="Leave blank to email a setup link"
+              placeholder="Leave blank to generate a sign-in link"
             />
+            <span className="mt-1 block text-xs text-slate-500">
+              Leave blank and you&apos;ll get a link to send them, so they choose their own
+              password.
+            </span>
           </Field>
           <Field label="First name">
             <input
@@ -211,25 +266,117 @@ export default function TeamPage() {
                     <StatusBadge status={u.status} />
                   </td>
                   <td className="px-4 py-3 text-slate-500">
-                    {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : '—'}
+                    {u.last_login_at ? (
+                      new Date(u.last_login_at).toLocaleString()
+                    ) : u.has_password ? (
+                      '—'
+                    ) : (
+                      <span className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                        No password set
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {u.status === 'active' && u.role !== 'owner' && (
-                      <button
-                        type="button"
-                        onClick={() => onArchive(u)}
-                        disabled={archiveUser.isPending}
-                        className="text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
-                      >
-                        Archive
-                      </button>
-                    )}
+                    <div className="inline-flex items-center gap-3">
+                      {u.status === 'active' && !u.has_password && (
+                        <button
+                          type="button"
+                          onClick={() => reissueInvite.mutate(u.id)}
+                          disabled={reissueInvite.isPending}
+                          className="text-sm font-medium text-brand-600 hover:text-brand-800 disabled:opacity-50"
+                        >
+                          {reissueInvite.isPending ? 'Generating…' : 'Get sign-in link'}
+                        </button>
+                      )}
+                      {u.status === 'active' && u.role !== 'owner' && (
+                        <button
+                          type="button"
+                          onClick={() => setPendingArchive(u)}
+                          disabled={archiveUser.isPending}
+                          className="text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The link a new worker uses to choose their own password.
+ *
+ * It is shown rather than only emailed because email delivery is
+ * optional in this product: with no mail provider configured the invite
+ * would otherwise vanish into a log line and the worker could never sign
+ * in — which is exactly what used to happen.
+ */
+function SetupLinkPanel({ invite, onDismiss }: { invite: InviteResult; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const url = invite.setupUrl ?? '';
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      // Clipboard can be blocked (insecure origin, permissions). The
+      // input below is selectable, so there is always a manual path.
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-brand-200 bg-brand-50 p-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">Sign-in link for {invite.email}</h2>
+          <p className="mt-1 text-sm text-slate-700">
+            {invite.emailDelivered
+              ? 'We emailed this to them. You can also send it yourself.'
+              : 'Email delivery is not set up, so this was not sent. Copy it and send it to them yourself.'}
+            {invite.inviteExpiresAt && (
+              <>
+                {' '}
+                It works once, and expires {new Date(invite.inviteExpiresAt).toLocaleDateString()}.
+              </>
+            )}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 text-sm text-slate-500 hover:text-slate-700"
+        >
+          Dismiss
+        </button>
+      </div>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <label htmlFor="setup-link" className="sr-only">
+          Sign-in link
+        </label>
+        <input
+          id="setup-link"
+          readOnly
+          value={url}
+          onFocus={(e) => e.currentTarget.select()}
+          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-mono text-xs text-slate-800 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+        />
+        <button
+          type="button"
+          onClick={copy}
+          className="shrink-0 rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          {copied ? 'Copied' : 'Copy link'}
+        </button>
       </div>
     </div>
   );

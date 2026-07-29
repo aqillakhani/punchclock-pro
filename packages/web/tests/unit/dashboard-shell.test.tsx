@@ -23,6 +23,7 @@ describe('DashboardShell sidebar gating', () => {
       'My Timesheet',
       'My Schedule',
       'Time off',
+      'Corrections',
       'Trades',
       'Documents',
     ]);
@@ -36,6 +37,7 @@ describe('DashboardShell sidebar gating', () => {
     expect(labels).toContain('My Timesheet');
     expect(labels).toContain('My Schedule');
     expect(labels).toContain('Time off');
+    expect(labels).toContain('Corrections');
     expect(labels).toContain('Trades');
     expect(labels).toContain('Documents');
     expect(labels).toContain('Team');
@@ -56,6 +58,7 @@ describe('DashboardShell sidebar gating', () => {
       'My Timesheet',
       'My Schedule',
       'Time off',
+      'Corrections',
       'Trades',
       'Documents',
       'Team',

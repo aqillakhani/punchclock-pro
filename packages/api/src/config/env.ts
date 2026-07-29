@@ -149,6 +149,21 @@ export function loadEnv(): AppEnv {
   return cached;
 }
 
+/**
+ * Drop the memoized env so the next `loadEnv()` re-reads `process.env`.
+ *
+ * Importing `config/logger.js` calls `loadEnv()` as a side effect, so by
+ * the time a CLI's module body runs the env is already frozen. The
+ * database CLIs need to swap DATABASE_URL for the schema-owner
+ * connection after that point (see db/owner-connection.ts), which is
+ * only possible if the cache can be invalidated.
+ *
+ * Not for use inside the running server — env is immutable there.
+ */
+export function resetEnvCache(): void {
+  cached = null;
+}
+
 export function corsOrigins(env: AppEnv = loadEnv()): string[] {
   return splitOrigins(env.CORS_ALLOWED_ORIGINS);
 }

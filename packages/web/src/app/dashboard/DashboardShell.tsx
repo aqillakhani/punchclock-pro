@@ -53,6 +53,12 @@ const NAV: NavItem[] = [
     icon: '✈',
     requires: PERMISSIONS.VIEW_TIME_OFF,
   },
+  {
+    href: '/dashboard/corrections',
+    label: 'Corrections',
+    icon: '✎',
+    requires: PERMISSIONS.VIEW_TIME_CORRECTION,
+  },
   { href: '/dashboard/trades', label: 'Trades', icon: '⇄', requires: PERMISSIONS.VIEW_TRADES },
   {
     href: '/dashboard/documents',
@@ -99,6 +105,11 @@ export function visibleNavFor(role: Role | undefined): NavItem[] {
   return NAV.filter((item) => can(role, item.requires));
 }
 
+interface CorrectionBadgeData {
+  myPendingCount: number;
+  approvePendingCount: number;
+}
+
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -109,6 +120,39 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     queryFn: () => apiClient.get('/auth/me'),
     staleTime: 5 * 60 * 1000,
   });
+
+  // Fetch pending correction counts for the badge
+  const myCorrections = useQuery({
+    queryKey: ['me', 'corrections'],
+    queryFn: () => apiClient.get<Array<{ status: string }>>('/api/v1/me/corrections'),
+    enabled: !!me.data && can(me.data.role, PERMISSIONS.SUBMIT_TIME_CORRECTION),
+    staleTime: 2 * 60 * 1000,
+  });
+
+  const adminCorrections = useQuery({
+    queryKey: ['admin', 'corrections', 'pending'],
+    queryFn: () =>
+      apiClient.get<Array<{ status: string }>>('/api/v1/admin/corrections?status=pending'),
+    enabled: !!me.data && can(me.data.role, PERMISSIONS.APPROVE_TIME_CORRECTION),
+    staleTime: 2 * 60 * 1000,
+  });
+
+  const correctionBadgeData: CorrectionBadgeData | null = me.data
+    ? {
+        myPendingCount: (myCorrections.data ?? []).filter((c) => c.status === 'pending').length,
+        approvePendingCount: (adminCorrections.data ?? []).length,
+      }
+    : null;
+
+  // The badge answers "how many things need me?". For an approver that
+  // is the review queue — which already contains their own pending
+  // requests, so adding both counts would double-count them. Everyone
+  // else sees how many of their own requests are still waiting.
+  const correctionsBadge = !correctionBadgeData
+    ? 0
+    : me.data && can(me.data.role, PERMISSIONS.APPROVE_TIME_CORRECTION)
+      ? correctionBadgeData.approvePendingCount
+      : correctionBadgeData.myPendingCount;
 
   // Render the preview banner when the owner has flipped on "preview
   // as worker". The header is sent on every request automatically by
@@ -155,19 +199,32 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 item.href === '/dashboard'
                   ? pathname === '/dashboard'
                   : pathname?.startsWith(item.href);
+              const isCorrections = item.href === '/dashboard/corrections';
+              const pendingCount = isCorrections ? correctionsBadge : 0;
+
               return (
                 <Link
                   key={item.href}
                   href={item.href}
                   className={[
-                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm',
+                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm justify-between',
                     active
                       ? 'bg-brand-50 font-medium text-brand-700'
                       : 'text-slate-700 hover:bg-slate-50',
                   ].join(' ')}
                 >
-                  <span className="text-base leading-none text-slate-400">{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="text-base leading-none text-slate-400">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </span>
+                  {isCorrections && pendingCount > 0 && (
+                    <span
+                      className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+                      aria-label={`${pendingCount} pending correction${pendingCount === 1 ? '' : 's'}`}
+                    >
+                      {pendingCount}
+                    </span>
+                  )}
                 </Link>
               );
             })

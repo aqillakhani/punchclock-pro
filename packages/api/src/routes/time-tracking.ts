@@ -31,7 +31,10 @@ timeTrackingRouter.post(
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
-    const result = await punchIn(db, req.user, req.body, { clientIp: req.ip ?? null });
+    const result = await punchIn(db, req.user, req.body, {
+      clientIp: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
     created(res, result);
   }),
 );
@@ -42,7 +45,10 @@ timeTrackingRouter.post(
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
-    const result = await punchOut(db, req.user, req.body);
+    const result = await punchOut(db, req.user, req.body, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
     ok(res, result);
   }),
 );

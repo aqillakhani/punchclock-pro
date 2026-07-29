@@ -17,7 +17,13 @@ import {
   loadUserCapContext,
   type CapWarning,
 } from './caps.service.js';
-import { evaluateMealBreak, loadMealBreakMinutes, type MealBreakWarning } from './break.service.js';
+import {
+  closeOpenBreaks,
+  evaluateMealBreak,
+  loadUnpaidBreakMinutes,
+  type MealBreakWarning,
+} from './break.service.js';
+import { AUDIT_ACTIONS, logAudit, type AuditContext } from './audit.service.js';
 import {
   loadOrgVerificationConfig,
   loadUserVerificationState,
@@ -39,6 +45,8 @@ interface TimeEntryRow {
   punch_in_geofence_id: string | null;
   punch_out_geofence_id: string | null;
   duration_minutes: number | null;
+  gross_minutes: number | null;
+  unpaid_break_minutes: number;
   status: (typeof TIME_ENTRY_STATUS)[keyof typeof TIME_ENTRY_STATUS];
   notes: string | null;
   device_info: unknown;
@@ -73,6 +81,8 @@ function rowToTimeEntry(row: TimeEntryRow): TimeEntry {
     punchInGeofenceId: row.punch_in_geofence_id,
     punchOutGeofenceId: row.punch_out_geofence_id,
     durationMinutes: row.duration_minutes,
+    grossMinutes: row.gross_minutes,
+    unpaidBreakMinutes: row.unpaid_break_minutes ?? 0,
     status: row.status,
     notes: row.notes,
     deviceInfo: row.device_info as TimeEntry['deviceInfo'],
@@ -110,7 +120,7 @@ export async function punchIn(
   db: PoolClient,
   user: AuthenticatedUser,
   input: PunchInRequestInput,
-  context: { clientIp?: string | null } = {},
+  context: { clientIp?: string | null; userAgent?: string | null } = {},
 ): Promise<PunchInResult> {
   // 1. Idempotency: if this clientGeneratedId has already been processed
   //    for this user, return the existing entry rather than creating a
@@ -230,6 +240,24 @@ export async function punchIn(
     recordedAt: new Date(input.timestamp),
   });
 
+  await logAudit(db, {
+    organizationId: user.organizationId,
+    actorUserId: user.userId,
+    resourceType: 'time_entry',
+    resourceId: row.id,
+    action: AUDIT_ACTIONS.PUNCH_IN,
+    changes: {
+      punchInAt: row.punch_in_at,
+      location: input.location ?? null,
+      geofenceId: decision.geofence?.id ?? null,
+      geofenceInside: decision.inside,
+      overrideReason: input.overrideReason ?? null,
+      capWarnings: capDecision.warnings.map((w) => w.scope),
+    },
+    ipAddress: context.clientIp,
+    userAgent: context.userAgent,
+  });
+
   return {
     timeEntry: rowToTimeEntry(row),
     geofence: {
@@ -251,6 +279,7 @@ export async function punchOut(
   db: PoolClient,
   user: AuthenticatedUser,
   input: PunchOutRequestInput,
+  context: AuditContext = {},
 ): Promise<PunchOutResult> {
   // Idempotency: replay returns the existing entry.
   const existingEvent = await db.query<{ time_entry_id: string | null }>(
@@ -271,6 +300,12 @@ export async function punchOut(
 
   const decision = await evaluateGeofence(db, input.location);
 
+  // A break left running at punch-out must be closed first, or its
+  // minutes never land in `breaks` and the meal period is paid by
+  // accident.
+  await closeOpenBreaks(db, open.id, input.timestamp);
+  const unpaidBreakMinutes = await loadUnpaidBreakMinutes(db, open.id);
+
   const { rows: updated } = await db.query<TimeEntryRow>(
     `UPDATE time_entries
      SET punch_out_at = $2,
@@ -278,8 +313,14 @@ export async function punchOut(
          punch_out_longitude = $4,
          punch_out_accuracy_m = $5,
          punch_out_geofence_id = $6,
-         duration_minutes = GREATEST(0,
+         gross_minutes = GREATEST(0,
            EXTRACT(EPOCH FROM ($2::timestamptz - punch_in_at))::int / 60),
+         unpaid_break_minutes = $8,
+         -- Payable time is wall-clock less unpaid breaks. Every
+         -- downstream consumer (timesheets, payroll export) sums
+         -- duration_minutes, so the deduction has to happen here.
+         duration_minutes = GREATEST(0,
+           EXTRACT(EPOCH FROM ($2::timestamptz - punch_in_at))::int / 60 - $8),
          status = 'completed',
          notes = COALESCE($7, notes),
          updated_at = NOW()
@@ -293,6 +334,7 @@ export async function punchOut(
       input.location?.accuracy ?? null,
       decision.geofence?.id ?? null,
       input.notes ?? null,
+      unpaidBreakMinutes,
     ],
   );
   const row = updated[0]!;
@@ -322,12 +364,31 @@ export async function punchOut(
       user.userId,
     ]),
   ]);
-  const mealBreakMinutes = await loadMealBreakMinutes(db, row.id);
   const mealEval = evaluateMealBreak({
-    shiftMinutes: row.duration_minutes ?? 0,
-    mealBreakMinutes,
+    // Entitlement is driven by how long the shift ran, not by what we
+    // ended up paying — so this is gross, before the break deduction.
+    shiftMinutes: row.gross_minutes ?? 0,
+    mealBreakMinutes: unpaidBreakMinutes,
     worksite: userRow.rows[0]?.worksite ?? 'onshore',
     orgTimezone: orgRow.rows[0]?.timezone ?? 'UTC',
+  });
+
+  await logAudit(db, {
+    organizationId: user.organizationId,
+    actorUserId: user.userId,
+    resourceType: 'time_entry',
+    resourceId: row.id,
+    action: AUDIT_ACTIONS.PUNCH_OUT,
+    changes: {
+      punchOutAt: row.punch_out_at,
+      grossMinutes: row.gross_minutes,
+      unpaidBreakMinutes: row.unpaid_break_minutes,
+      durationMinutes: row.duration_minutes,
+      location: input.location ?? null,
+      mealBreakWarnings: mealEval.warnings.map((w) => w.code),
+    },
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
   });
 
   return {
@@ -339,18 +400,40 @@ export async function punchOut(
 export async function listEntries(
   db: PoolClient,
   user: AuthenticatedUser,
-  opts: { userId?: string; fromDate?: string; toDate?: string; limit?: number } = {},
+  opts: {
+    userId?: string;
+    fromDate?: string;
+    toDate?: string;
+    limit?: number;
+    includeDeleted?: boolean;
+  } = {},
 ): Promise<TimeEntry[]> {
-  const limit = Math.min(opts.limit ?? 100, 500);
+  // Guard against NaN/negative/oversized limits reaching the SQL string.
+  const requested = Number(opts.limit);
+  const limit =
+    Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), 500) : 100;
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (opts.userId) {
-    params.push(opts.userId);
-    conditions.push(`user_id = $${params.length}`);
-  } else if (user.role === 'employee') {
-    // Employees only see their own entries.
-    params.push(user.userId);
+  // Removed entries are soft-deleted so the audit trail survives, but
+  // they are not part of anyone's timesheet — leaving them in meant a
+  // deleted punch still showed in the worker's list, and acting on it
+  // failed with a confusing error.
+  if (!opts.includeDeleted) {
+    conditions.push(`status <> 'deleted'`);
+  }
+
+  // Employees are confined to their own entries — an explicit `userId`
+  // for anyone else is refused rather than silently widened. Without
+  // this, `?userId=<coworker>` returned another worker's punches and
+  // GPS coordinates (RLS only scopes to the organization, not the user).
+  if (user.role === 'employee' && opts.userId && opts.userId !== user.userId) {
+    throw AppError.forbidden('You can only view your own time entries');
+  }
+
+  const scopedUserId = user.role === 'employee' ? user.userId : opts.userId;
+  if (scopedUserId) {
+    params.push(scopedUserId);
     conditions.push(`user_id = $${params.length}`);
   }
 

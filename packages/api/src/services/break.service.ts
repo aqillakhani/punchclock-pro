@@ -23,10 +23,18 @@ export {
 } from './meal-break.service.js';
 
 /**
- * DB-side helper: sum completed meal-break minutes on a given
- * time entry.
+ * Sum the completed UNPAID break minutes on an entry — the number that
+ * gets subtracted from payable time.
+ *
+ * Short rest breaks (`break_type='standard'`) are excluded on purpose:
+ * under the FLSA, rest periods of roughly 20 minutes or less are
+ * compensable hours worked and must stay paid. Only meal periods
+ * ('lunch') and explicitly unpaid breaks come off the clock.
+ *
+ * Must stay in step with `UNPAID_BREAK_TYPES` in the shared package and
+ * with the backfill in migration 007.
  */
-export async function loadMealBreakMinutes(db: PoolClient, timeEntryId: string): Promise<number> {
+export async function loadUnpaidBreakMinutes(db: PoolClient, timeEntryId: string): Promise<number> {
   const { rows } = await db.query<{ total_minutes: string }>(
     `SELECT COALESCE(SUM(duration_minutes), 0)::text AS total_minutes
      FROM breaks
@@ -36,6 +44,44 @@ export async function loadMealBreakMinutes(db: PoolClient, timeEntryId: string):
     [timeEntryId],
   );
   return Number(rows[0]?.total_minutes ?? 0);
+}
+
+/**
+ * Meal-break compliance uses the same set of breaks as the payable-time
+ * deduction, so this is an alias kept for call-site clarity: the
+ * compliance evaluator asks "did they get their meal break?", the payroll
+ * path asks "how much time is unpaid?".
+ */
+export const loadMealBreakMinutes = loadUnpaidBreakMinutes;
+
+/**
+ * Close any break still running when the worker punches out.
+ *
+ * Without this a forgotten break stays `in_progress` forever, is never
+ * counted, and the meal period silently becomes paid time. Ending it at
+ * the punch-out instant is the honest reading: the worker was not back
+ * on the clock before the shift ended.
+ *
+ * Returns the number of breaks closed.
+ */
+export async function closeOpenBreaks(
+  db: PoolClient,
+  timeEntryId: string,
+  endedAt: string,
+): Promise<number> {
+  const { rowCount } = await db.query(
+    `UPDATE breaks
+     SET break_end = $2,
+         duration_minutes = GREATEST(0,
+           EXTRACT(EPOCH FROM ($2::timestamptz - break_start))::int / 60),
+         status = 'completed',
+         updated_at = NOW()
+     WHERE time_entry_id = $1
+       AND status = 'in_progress'
+       AND $2::timestamptz > break_start`,
+    [timeEntryId, endedAt],
+  );
+  return rowCount ?? 0;
 }
 
 interface BreakRow {

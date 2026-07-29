@@ -18,7 +18,9 @@ module.exports = {
       },
     ],
   },
-  testMatch: ['<rootDir>/src/**/*.test.ts', '<rootDir>/tests/**/*.test.ts'],
+  // Unit suite only. The integration tests need a live Postgres and run
+  // via `pnpm test:integration` (jest.integration.cjs).
+  testMatch: ['<rootDir>/src/**/*.test.ts', '<rootDir>/tests/unit/**/*.test.ts'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/db/migrate.ts', '!src/db/prod-seed.ts', '!src/db/prune-audit-logs.ts'],
   coverageThreshold: {
     global: {

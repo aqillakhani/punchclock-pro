@@ -56,6 +56,49 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @punchclock/api test
 
+  test-api-integration:
+    name: API integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_DB: punchclock
+          POSTGRES_USER: punchclock
+          POSTGRES_PASSWORD: punchclock
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Migrations and role provisioning run as the bootstrap superuser…
+      OWNER_DATABASE_URL: postgresql://punchclock:punchclock@localhost:5432/punchclock
+      # …but the app under test connects as the least-privilege role, so
+      # row-level security actually applies and the tenant-isolation
+      # suite is meaningful. A superuser here would make it pass blindly.
+      DATABASE_URL: postgresql://punchclock_app:ci-app-password-123@localhost:5432/punchclock
+      APP_DB_PASSWORD: ci-app-password-123
+      JWT_SECRET: integration-test-secret-not-for-production
+      BCRYPT_ROUNDS: '4'
+      LOG_LEVEL: fatal
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @punchclock/shared build
+      - name: Apply migrations
+        run: pnpm --filter @punchclock/api db:migrate
+      - name: Provision the least-privilege application role
+        run: pnpm --filter @punchclock/api db:create-app-role
+      - run: pnpm --filter @punchclock/api test:integration
+
   build-web:
     name: Build web dashboard
     runs-on: ubuntu-latest
