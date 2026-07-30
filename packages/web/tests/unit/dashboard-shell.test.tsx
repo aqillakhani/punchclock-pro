@@ -43,6 +43,7 @@ describe('DashboardShell sidebar gating', () => {
     expect(labels).toContain('Team');
     expect(labels).toContain('Schedule');
     expect(labels).toContain('Timesheets');
+    expect(labels).toContain('Pay periods');
     expect(labels).toContain('Reports');
     // Owner-only.
     expect(labels).not.toContain('Settings');
@@ -64,6 +65,7 @@ describe('DashboardShell sidebar gating', () => {
       'Team',
       'Schedule',
       'Timesheets',
+      'Pay periods',
       'Reports',
       'Audit log',
       'Preview as…',
@@ -74,6 +76,13 @@ describe('DashboardShell sidebar gating', () => {
   });
 
   it('limits the viewer to read-only oversight surfaces', () => {
-    expect(labelsFor('viewer')).toEqual(['Overview', 'Team', 'Schedule', 'Timesheets', 'Reports']);
+    expect(labelsFor('viewer')).toEqual([
+      'Overview',
+      'Team',
+      'Schedule',
+      'Timesheets',
+      'Pay periods',
+      'Reports',
+    ]);
   });
 });

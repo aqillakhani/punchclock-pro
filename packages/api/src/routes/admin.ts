@@ -61,6 +61,9 @@ adminRouter.get(
               feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
               feature_documents, feature_time_off, feature_shift_trades,
               feature_push_notifications,
+              pay_period_type,
+              to_char(pay_period_anchor_date, 'YYYY-MM-DD') AS pay_period_anchor_date,
+              auto_clock_out_minutes,
               created_at
        FROM organizations LIMIT 1`,
     );
@@ -88,6 +91,9 @@ adminRouter.patch(
       maxWeeklyMinutes: 'max_weekly_minutes',
       capEnforcement: 'cap_enforcement',
       weeklyLaborBudget: 'weekly_labor_budget',
+      payPeriodType: 'pay_period_type',
+      payPeriodAnchorDate: 'pay_period_anchor_date',
+      autoClockOutMinutes: 'auto_clock_out_minutes',
       featureCashDrawer: 'feature_cash_drawer',
       featureKioskQr: 'feature_kiosk_qr',
       featurePredictiveScheduling: 'feature_predictive_scheduling',
@@ -121,7 +127,10 @@ adminRouter.patch(
                  weekly_labor_budget, punch_verification_methods, allowed_punch_cidrs,
                  feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
                  feature_documents, feature_time_off, feature_shift_trades,
-                 feature_push_notifications`,
+                 feature_push_notifications,
+                 pay_period_type,
+                 to_char(pay_period_anchor_date, 'YYYY-MM-DD') AS pay_period_anchor_date,
+                 auto_clock_out_minutes`,
       values,
     );
     ok(res, rows[0]);

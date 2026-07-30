@@ -35,6 +35,11 @@ export const AUDIT_ACTIONS = {
   ENTRY_CREATED_MANUAL: 'entry_created_manual',
   ENTRY_EDITED: 'entry_edited',
   ENTRY_DELETED: 'entry_deleted',
+  /** The system closed a forgotten punch — actor is null. */
+  AUTO_CLOCK_OUT: 'auto_clock_out',
+
+  PAY_PERIOD_LOCKED: 'pay_period_locked',
+  PAY_PERIOD_UNLOCKED: 'pay_period_unlocked',
 
   USER_INVITED: 'user_invited',
   USER_DELETED: 'user_deleted',
@@ -51,6 +56,7 @@ export type AuditResourceType =
   | 'break'
   | 'user'
   | 'organization'
+  | 'pay_period'
   | 'payroll';
 
 export interface AuditContext {

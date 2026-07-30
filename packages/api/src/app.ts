@@ -14,6 +14,7 @@ import { adminRouter } from './routes/admin.js';
 import { meRouter } from './routes/me.js';
 import { syncRouter } from './routes/sync.js';
 import { adminCorrectionsRouter, meCorrectionsRouter } from './routes/corrections.js';
+import { payPeriodsRouter } from './routes/pay-periods.js';
 
 export function createApp(): Express {
   const env = loadEnv();
@@ -38,6 +39,7 @@ export function createApp(): Express {
   // are two halves of a single workflow.
   app.use('/api/v1/me/corrections', meCorrectionsRouter);
   app.use('/api/v1/admin', adminCorrectionsRouter);
+  app.use('/api/v1/admin/pay-periods', payPeriodsRouter);
   app.use('/api/v1/admin', adminRouter);
   app.use('/api/v1/me', meRouter);
   app.use('/api/v1/sync', syncRouter);
