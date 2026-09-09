@@ -34,6 +34,7 @@ import { AppError } from '../lib/errors.js';
 import { publishTimeEvent } from '../events/publisher.js';
 import { loadUnpaidBreakMinutes } from './break.service.js';
 import { AUDIT_ACTIONS, logAudit, type AuditContext } from './audit.service.js';
+import { assertNotInLockedPeriod } from './pay-period.service.js';
 
 export interface CorrectionRow {
   id: string;
@@ -146,6 +147,14 @@ export async function createCorrectionRequest(
     originalIn = entry.punch_in_at;
     originalOut = entry.punch_out_at;
     assertWithinCorrectionWindow(entry.punch_in_at, new Date());
+    // Refuse early rather than letting someone file a request that could
+    // never be approved. Both ends are checked so an entry can be moved
+    // neither out of nor into a locked period.
+    await assertNotInLockedPeriod(db, [
+      entry.punch_in_at,
+      input.requestedPunchInAt,
+      input.requestedPunchOutAt,
+    ]);
 
     const { rows: pending } = await db.query<{ id: string }>(
       `SELECT id FROM time_correction_requests
@@ -158,6 +167,7 @@ export async function createCorrectionRequest(
   } else {
     // add_entry — the shift being claimed must be inside the window too.
     assertWithinCorrectionWindow(input.requestedPunchInAt ?? null, new Date());
+    await assertNotInLockedPeriod(db, [input.requestedPunchInAt, input.requestedPunchOutAt]);
   }
 
   const { rows } = await db.query<CorrectionRow>(
@@ -350,6 +360,15 @@ export async function decideCorrectionRequest(
   let minutesDelta: number | null = null;
 
   if (approved) {
+    // Re-checked at decision time: a period can be locked between a
+    // request being filed and a manager getting to it, and approving
+    // then would silently contradict a payroll run.
+    await assertNotInLockedPeriod(db, [
+      req.original_punch_in_at,
+      req.original_punch_out_at,
+      input.overridePunchInAt ?? req.requested_punch_in_at,
+      input.overridePunchOutAt ?? req.requested_punch_out_at,
+    ]);
     // "Approve with modification" — the manager's override wins over
     // what the worker asked for.
     const finalIn = input.overridePunchInAt ?? req.requested_punch_in_at;

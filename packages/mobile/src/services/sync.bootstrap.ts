@@ -1,7 +1,12 @@
 import type { Database } from '@nozbe/watermelondb';
 import type { QueueItem } from '../db/types';
 import { WatermelonDBSyncQueueRepo } from '../db/repos/sync-queue.watermelon';
-import { initSyncService, type ServerPoster, type ServerResult, type SyncService } from './sync.service';
+import {
+  initSyncService,
+  type ServerPoster,
+  type ServerResult,
+  type SyncService,
+} from './sync.service';
 import { apiRequest } from './http-client';
 
 const PATHS: Record<QueueItem['operationType'], string> = {
@@ -28,14 +33,34 @@ export function makePoster(getToken: () => string | null): ServerPoster {
         timeoutMs: 4000,
         body: item.payload,
       });
-      const serverId = res?.entry?.id ?? res?.break?.id ?? '';
+      const serverId = res?.entry?.id ?? res?.break?.id;
+      if (!serverId) {
+        // Accepting this would mark the punch synced with no server-side
+        // handle, leaving nothing to reconcile against later. Treat it as
+        // a server-side failure rather than quietly losing the reference.
+        return {
+          ok: false,
+          kind: 'transient',
+          error: 'API accepted the punch without returning an id',
+        };
+      }
       return { ok: true, serverId };
     } catch (err) {
+      const message = (err as Error).message;
       const code = (err as Error & { code?: string }).code;
-      if (code && CONFLICT_CODES.has(code)) {
-        return { ok: false, kind: 'conflict', reason: code };
+      if (code) {
+        // An error code only exists on a parsed API envelope, so the
+        // server received the operation and rejected it deliberately.
+        if (CONFLICT_CODES.has(code)) {
+          return { ok: false, kind: 'conflict', reason: code };
+        }
+        return { ok: false, kind: 'transient', error: message };
       }
-      return { ok: false, kind: 'transient', error: (err as Error).message };
+      // No code means no API response came back at all: airplane mode,
+      // no signal, DNS/TLS failure, the 4s abort, or a gateway that
+      // answered with something that is not our JSON envelope. The punch
+      // never reached the server, so it keeps its full retry budget.
+      return { ok: false, kind: 'unreachable', error: message };
     }
   };
 }

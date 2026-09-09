@@ -75,6 +75,10 @@ const EXPECTED_MATRIX: Record<Action, Record<Role, boolean>> = {
   [PERMISSIONS.DELETE_USER]: { owner: true, manager: false, employee: false, viewer: false },
   [PERMISSIONS.VIEW_SCHEDULE]: { owner: true, manager: true, employee: false, viewer: true },
   [PERMISSIONS.EDIT_SCHEDULE]: { owner: true, manager: true, employee: false, viewer: false },
+  // Managers and viewers see the payroll calendar because it governs
+  // what may still be edited; only an owner may declare it final.
+  [PERMISSIONS.VIEW_PAY_PERIODS]: { owner: true, manager: true, employee: false, viewer: true },
+  [PERMISSIONS.LOCK_PAY_PERIOD]: { owner: true, manager: false, employee: false, viewer: false },
   [PERMISSIONS.VIEW_TIMESHEETS]: { owner: true, manager: true, employee: false, viewer: true },
   [PERMISSIONS.VIEW_REPORTS]: { owner: true, manager: true, employee: false, viewer: true },
   [PERMISSIONS.EXPORT_PAYROLL]: { owner: true, manager: false, employee: false, viewer: false },

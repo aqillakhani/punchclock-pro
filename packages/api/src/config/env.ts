@@ -52,6 +52,28 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('PunchClock Pro <onboarding@resend.dev>'),
 
+  // ---- Scheduled background jobs ----
+  /**
+   * The API runs its own periodic sweeps (auto clock-out, audit-log
+   * pruning). A Postgres advisory lock keeps them correct when more than
+   * one machine is in service, so this stays on by default. Set to
+   * 'false' only when driving the equivalent CLIs from an external
+   * scheduler instead — leaving both off means forgotten punches are
+   * never closed and audit logs grow without bound.
+   */
+  // An enum, not a loose string test: getting this wrong in either
+  // direction is expensive (jobs silently not running, or running when an
+  // external scheduler owns them), so a typo must fail the boot loudly
+  // rather than quietly pick a side.
+  SCHEDULED_JOBS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  AUTO_CLOCK_OUT_INTERVAL_MINUTES: z.coerce.number().int().positive().default(60),
+  AUDIT_LOG_PRUNE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
+  /** Grace period after boot before the first pass, so a crash-looping machine cannot hammer the database. */
+  SCHEDULED_JOBS_INITIAL_DELAY_SECONDS: z.coerce.number().int().nonnegative().default(30),
+
   // ---- Document storage (S3-compatible: Cloudflare R2 / AWS S3) ----
   S3_ENDPOINT: z.string().url().optional(),
   S3_REGION: z.string().default('auto'),

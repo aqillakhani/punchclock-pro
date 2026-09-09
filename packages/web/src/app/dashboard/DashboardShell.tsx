@@ -79,6 +79,12 @@ const NAV: NavItem[] = [
     icon: '☷',
     requires: PERMISSIONS.VIEW_TIMESHEETS,
   },
+  {
+    href: '/dashboard/pay-periods',
+    label: 'Pay periods',
+    icon: '◈',
+    requires: PERMISSIONS.VIEW_PAY_PERIODS,
+  },
   { href: '/dashboard/reports', label: 'Reports', icon: '◔', requires: PERMISSIONS.VIEW_REPORTS },
   {
     href: '/dashboard/audit-log',

@@ -43,6 +43,7 @@ import {
   sendEmail,
 } from '../services/email.service.js';
 import { AUDIT_ACTIONS, diffChanges, logAudit } from '../services/audit.service.js';
+import { assertNotInLockedPeriod } from '../services/pay-period.service.js';
 import { publishTimeEvent } from '../events/publisher.js';
 import { EVENT_TYPES } from '@punchclock/shared';
 
@@ -263,6 +264,8 @@ adminCorrectionsRouter.post(
     );
     if (!target[0]) throw AppError.notFound('User');
 
+    await assertNotInLockedPeriod(db, [body.punchInAt, body.punchOutAt]);
+
     const { rows: clash } = await db.query<{ id: string }>(
       `SELECT id FROM time_entries
        WHERE user_id = $1
@@ -351,6 +354,14 @@ adminCorrectionsRouter.patch(
     if (!entry) throw AppError.notFound('Time entry');
     if (entry.status === 'deleted') throw AppError.conflict('That time entry has been removed');
 
+    // Where it is now and where it would move to must both be open.
+    await assertNotInLockedPeriod(db, [
+      entry.punch_in_at,
+      entry.punch_out_at,
+      body.punchInAt,
+      body.punchOutAt,
+    ]);
+
     const nextIn = body.punchInAt ?? entry.punch_in_at;
     const nextOut = body.punchOutAt ?? entry.punch_out_at;
     if (nextOut && new Date(nextOut) <= new Date(nextIn)) {
@@ -418,6 +429,13 @@ adminCorrectionsRouter.delete(
     if (!id) throw AppError.validation('time entry id required');
     const reason = typeof req.query.reason === 'string' ? req.query.reason.trim() : '';
     if (!reason) throw AppError.validation('A reason is required to remove a time entry');
+
+    const { rows: target } = await db.query<{ punch_in_at: string; punch_out_at: string | null }>(
+      `SELECT punch_in_at, punch_out_at FROM time_entries WHERE id = $1`,
+      [id],
+    );
+    if (!target[0]) throw AppError.notFound('Time entry');
+    await assertNotInLockedPeriod(db, [target[0].punch_in_at, target[0].punch_out_at]);
 
     const { rows } = await db.query<{
       user_id: string;
