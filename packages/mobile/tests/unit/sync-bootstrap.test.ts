@@ -24,6 +24,7 @@ interface MockFetchInit {
 function mockFetch(reply: MockFetchInit) {
   globalThis.fetch = (async () => ({
     ok: reply.status >= 200 && reply.status < 300,
+    status: reply.status,
     json: async () => reply.body,
   })) as unknown as typeof fetch;
 }
@@ -71,12 +72,71 @@ describe('makePoster', () => {
     expect(result).toEqual({ ok: false, kind: 'transient', error: 'database unavailable' });
   });
 
-  it('treats network failures as transient', async () => {
-    globalThis.fetch = (() => Promise.reject(new Error('Network request failed'))) as unknown as typeof fetch;
+  it('treats a network failure as unreachable, not as a failed attempt', async () => {
+    // The server never saw the punch, so this must not count against the
+    // item's retry budget — otherwise time spent out of signal destroys it.
+    globalThis.fetch = (() =>
+      Promise.reject(new Error('Network request failed'))) as unknown as typeof fetch;
 
     const poster = makePoster(() => null);
     const result = await poster(sampleItem);
 
-    expect(result).toEqual({ ok: false, kind: 'transient', error: 'Network request failed' });
+    expect(result).toEqual({ ok: false, kind: 'unreachable', error: 'Network request failed' });
+  });
+
+  it('treats a client-side timeout as unreachable', async () => {
+    const abort = new Error('Aborted');
+    abort.name = 'AbortError';
+    globalThis.fetch = (() => Promise.reject(abort)) as unknown as typeof fetch;
+
+    const poster = makePoster(() => null);
+    const result = await poster(sampleItem);
+
+    expect(result).toEqual({ ok: false, kind: 'unreachable', error: 'Aborted' });
+  });
+
+  it('treats a non-JSON gateway body as unreachable', async () => {
+    // A Fly/proxy 502 returns HTML, so res.json() throws with no API
+    // error code. The request never produced an API response either.
+    globalThis.fetch = (async () => ({
+      ok: false,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON at position 0');
+      },
+    })) as unknown as typeof fetch;
+
+    const poster = makePoster(() => null);
+    const result = await poster(sampleItem);
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'unreachable',
+      error: 'Unexpected token < in JSON at position 0',
+    });
+  });
+});
+
+describe('makePoster — responses that lie', () => {
+  it('does not treat an HTTP 500 as delivered just because the body says success', async () => {
+    // A proxy or gateway can rewrite a response envelope. Believing the body
+    // here would mark the punch synced and drop it from the queue for good.
+    mockFetch({
+      status: 500,
+      body: { success: true, data: { entry: { id: 'srv-1' } } },
+    });
+
+    const poster = makePoster(() => null);
+    const result = await poster(sampleItem);
+
+    expect(result).toEqual({ ok: false, kind: 'unreachable', error: 'HTTP 500' });
+  });
+
+  it('refuses a success response that carries no server id', async () => {
+    mockFetch({ status: 200, body: { success: true, data: {} } });
+
+    const poster = makePoster(() => null);
+    const result = await poster(sampleItem);
+
+    expect(result).toMatchObject({ ok: false, kind: 'transient' });
   });
 });

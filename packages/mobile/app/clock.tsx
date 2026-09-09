@@ -5,6 +5,7 @@ import { usePunch } from '@/hooks/usePunch';
 import { useSyncStore } from '@/store/sync.store';
 import { useAuthStore } from '@/store/auth.store';
 import { SyncIndicator } from '@/components/SyncIndicator';
+import { UnsentPunches } from '@/components/UnsentPunches';
 import { apiRequest } from '@/services/http-client';
 import { logout } from '@/services/auth.service';
 
@@ -96,6 +97,8 @@ export default function ClockScreen() {
           </Text>
         )}
       </View>
+
+      <UnsentPunches />
 
       <Pressable
         onPress={onSignOut}
