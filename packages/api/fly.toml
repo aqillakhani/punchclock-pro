@@ -8,7 +8,16 @@
 #     --dockerfile packages/api/Dockerfile
 #
 # Required secrets (set once with `flyctl secrets set ... --config packages/api/fly.toml`):
-#   DATABASE_URL            Neon pooled connection string (?sslmode=require)
+#   DATABASE_URL            postgres://punchclock_app:<pw>@punchclock-db.internal:5432/punchclock
+#                           Self-hosted Postgres 16 + TimescaleDB + PostGIS on Fly
+#                           (app `punchclock-db`, image in deploy/db/) — NOT Neon,
+#                           which cannot host the timescaledb extension the schema
+#                           needs. Connect as `punchclock_app`, never the bootstrap
+#                           superuser: RLS is the tenant boundary and a superuser
+#                           silently skips every policy.
+#                           Put NO `sslmode` in this URL — recent `pg` reads
+#                           sslmode=require as verify-full and rejects the
+#                           self-signed cert. TLS comes from DATABASE_SSL below.
 #   JWT_SECRET              64 random bytes (openssl rand -base64 64)
 #   CORS_ALLOWED_ORIGINS    https://<your web domain>  (no localhost in prod)
 #   WEB_APP_URL             https://<your web domain>  (used in email links)
@@ -30,18 +39,35 @@
 app = "punchclock-api"
 primary_region = "ord"
 
+# Periodic sweeps (auto clock-out, audit-log pruning) run inside the API
+# process on a timer — see packages/api/src/jobs/. They are deliberately NOT a
+# separate scheduled machine: an out-of-band `fly machine run` is invisible in
+# the repo and gets lost when the app is recreated, which is how audit-log
+# pruning stayed documented-but-never-running. A Postgres advisory lock keeps
+# them correct if `fly scale count` ever puts more than one machine in service.
+# Override cadence with AUTO_CLOCK_OUT_INTERVAL_MINUTES /
+# AUDIT_LOG_PRUNE_INTERVAL_MINUTES, or set SCHEDULED_JOBS_ENABLED=false to
+# drive the equivalent CLIs from somewhere else.
 [env]
   NODE_ENV = "production"
   API_PORT = "8080"
   DATABASE_SSL = "true"
   EMAIL_PROVIDER = "resend"
+  SCHEDULED_JOBS_ENABLED = "true"
 
 [http_service]
   internal_port = 8080
   force_https = true
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  # Keep one machine warm — the API holds long-lived Socket.io connections.
+  # Keep one machine warm — the API holds long-lived Socket.io connections,
+  # AND the scheduled sweeps above are Node timers inside this process. A
+  # suspended machine runs no timers, so this line is load-bearing for them.
+  # Fly stops/suspends machines only down to this floor, never below it, so
+  # one machine stays fully running in the primary region even with no
+  # traffic: https://fly.io/docs/launch/autostop-autostart/
+  # Note the floor is per primary region — adding a second region would not
+  # extend the guarantee to it.
   min_machines_running = 1
 
   [http_service.concurrency]

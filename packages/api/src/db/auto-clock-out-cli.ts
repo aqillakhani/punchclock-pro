@@ -6,7 +6,9 @@
  * bypassed — hence `withTenantTx(null, …)`, the same system-job context
  * the audit-log pruner uses.
  *
- * Invoke on a schedule (a Fly scheduled machine, or any cron):
+ * The sweep runs automatically — the in-process scheduler (`jobs/index.ts`)
+ * drives it hourly. This CLI is the manual entry point, for a backfill or
+ * while `SCHEDULED_JOBS_ENABLED=false`:
  *   pnpm --filter @punchclock/api db:auto-clock-out
  *
  * Hourly is a sensible cadence: the close time is derived from

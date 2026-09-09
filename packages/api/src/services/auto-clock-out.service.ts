@@ -22,6 +22,17 @@
  *
  * OFF BY DEFAULT. `auto_clock_out_minutes` is NULL until an owner opts
  * in, because switching this on changes what people get paid.
+ *
+ * PAY-PERIOD LOCKS ARE DELIBERATELY NOT CHECKED
+ * ---------------------------------------------
+ * This is the same carve-out `assertNotInLockedPeriod` makes for live
+ * punching: closing an entry that is still `in_progress` finishes a punch,
+ * it does not retroactively edit a settled one. Gating it would be actively
+ * harmful — an entry left open when its period was locked could then never
+ * be closed, and the open-entry index would block that worker from ever
+ * punching in again, which is the exact failure this feature exists to
+ * prevent. A worker who disagrees with an auto-close files a correction,
+ * and that path *is* gated.
  */
 import type { PoolClient } from 'pg';
 import { EVENT_TYPES } from '@punchclock/shared';
