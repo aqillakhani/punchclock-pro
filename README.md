@@ -4,7 +4,11 @@
 
 Self-hosted workforce time-tracking platform: punch in/out with GPS, real-time team dashboard, shift scheduling, offline-first mobile, event-sourced storage. No SaaS subscriptions.
 
-**Live demo:** [CONFIRM] · **Walkthrough:** [CONFIRM]
+**Live:** [app](https://punchclock-web-lake.vercel.app) · [API health](https://punchclock-api.fly.dev/health)
+
+> **Taking this system over?** Start with **[docs/HANDOVER.md](docs/HANDOVER.md)** — sign-in,
+> day-to-day use, and an honest list of what is and isn't finished. The rest of this
+> README is for developers.
 
 ## Problem
 
