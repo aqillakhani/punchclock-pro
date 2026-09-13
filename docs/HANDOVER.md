@@ -141,15 +141,23 @@ their GPS is slow, **the punch still goes through** — it waits about 5 seconds
 records the punch without a location. Nobody gets stuck.
 
 > ### The one thing to warn workers about
-> **Always punch out.** The system allows only one open shift per person, and there
-> is currently no automatic close-out. If someone forgets to punch out, **they cannot
-> punch in for their next shift** until it is fixed.
+> **Always punch out.** The system allows only one open shift per person. If someone
+> forgets to punch out, **they cannot punch in for their next shift** until it is fixed.
 >
 > Fix it yourself: **Timesheets** → find the entry → edit it and set the correct
 > punch-out time (you must give a reason; it is recorded).
 >
-> The permanent fix for this is built and tested but not yet switched on in
-> production — see [Section 8](#what-is-not-finished).
+> **The automatic safety net is now deployed but switched off.** A job runs every hour
+> looking for shifts left open too long. It does nothing until you choose a cut-off in
+> **Settings → Payroll & shifts → Clock-out after (hours)**. Pick something safely
+> longer than your longest real shift — 12 or 16 hours suits most businesses.
+>
+> When it fires, it closes the shift at **punch-in plus your cut-off**, not at the
+> moment it noticed — so the hours are predictable and the same every time. Closed
+> shifts are flagged, and the worker can file a correction if the time is wrong.
+>
+> **Turning it on changes what people get paid, so it is deliberately your decision,
+> not a default.**
 
 ---
 
@@ -185,10 +193,20 @@ records the punch without a location. Nobody gets stuck.
 Unpaid breaks are already subtracted — an 8-hour shift with a 30-minute unpaid lunch
 exports as 7.5 paid hours.
 
-> **Note:** "Lock the pay period" (so nobody can quietly change hours after you have
-> paid them) is built and tested but **not switched on in production yet**. Until it
-> is, an approved correction *can* alter a period you have already paid. Until then,
-> keep your exported CSV as the record of what you actually paid.
+### Lock the period once you have paid it
+
+Locking a pay period stops anyone quietly changing hours you have already paid out.
+Go to **Pay periods**, find the period you just ran, and lock it.
+
+- Locking blocks **retroactive** changes only — corrections, and manager edits to past
+  entries. **It never stops anyone clocking in.** Trapping a worker off the clock
+  would be worse than the problem it solves.
+- Rejecting a correction is still allowed while locked, because it changes no hours.
+- Only an **owner** can unlock, and unlocking **requires a written reason**, which goes
+  into the audit log.
+
+Set your payroll calendar first in **Settings → Payroll & shifts**: weekly, fortnightly,
+twice-monthly or monthly, plus the date your first period starts.
 
 ---
 
@@ -242,10 +260,12 @@ about them before you rely on it.
    ever delivered. Everything that would be emailed has to be copied and sent by hand.
    Switching it on needs a Resend account and a verified sending domain.
 3. **No password recovery.** Follows from #2. Guard the owner password.
-4. **No automatic close-out for forgotten punches.** Built, tested, and waiting to be
-   switched on. Until then a forgotten punch-out blocks that worker's next shift.
-5. **Pay periods cannot be locked yet.** Same batch of work. Until it ships, hours can
-   in principle be changed after you have paid them.
+4. **Automatic close-out is deployed but off.** You must choose a cut-off in
+   **Settings → Payroll & shifts** before it does anything, because turning it on
+   changes what people get paid. Until you do, a forgotten punch-out still blocks that
+   worker's next shift.
+5. **Pay-period locking is deployed but unused.** Nothing is locked until you lock it
+   after each payroll run.
 6. **Backups are thin.** The database is snapshotted daily and kept for **5 days
    only**, there is no copy stored anywhere else, and the restore procedure has never
    been rehearsed. If something went wrong and was not noticed for a week, the data is
@@ -258,9 +278,15 @@ about them before you rely on it.
 9. **Old data is kept forever.** GPS locations and pay rates are never deleted, and
    there is no retention policy. Worth a look if you have privacy obligations.
 
-Items 4, 5 and the automatic clean-up of old audit records are all finished code
-sitting in a reviewed, tested pull request (**PR #4**) that has not been deployed.
-Deploying it is a short job for whoever handles the technical side.
+Items 4 and 5, plus automatic clean-up of old audit records, were **deployed to the API
+on 13 September 2026** (version `9a83921`, database migration 008). The hourly and daily
+background jobs are confirmed running. Both features are inert until you configure them,
+which is intentional — see Sections 4 and 6.
+
+**One step is still outstanding:** the matching screens (**Pay periods**, and the new
+Payroll & shifts block in **Settings**) only appear once PR #4 is merged on GitHub,
+which redeploys the website. Until then the API supports both features but there is no
+button to press. See Section 9.
 
 ---
 
@@ -315,23 +341,44 @@ SELECT email, role, password_hash IS NOT NULL AS has_password, last_login_at
 FROM users WHERE deleted_at IS NULL;
 ```
 
-### Deploying the outstanding work (PR #4)
-Branch `feat/pay-periods-auto-clockout` is three commits ahead of `main` and green in
-CI. It contains pay-period locking, auto clock-out, the job scheduler (which also runs
-audit-log pruning), and a mobile fix that stops punches being lost offline.
+### State of the API deploy (13 September 2026)
 
-**Order matters — migration first, or every punch breaks:**
+**Done and verified in production:**
+
+- Migration 008 applied. `schema_migrations` now ends at
+  `008_pay_periods_and_auto_clock_out.sql`; `pay_periods` exists with RLS enabled *and*
+  forced, and `punchclock_app` picked up its grants automatically through the
+  `ALTER DEFAULT PRIVILEGES` in `create-app-role.ts` — no manual GRANT needed.
+- API deployed at `APP_VERSION=9a83921`. `/health` →
+  `{"status":"ok","version":"9a83921","db":"up","redis":"disabled"}`.
+- Scheduler confirmed in the logs: `auto-clock-out` every 3,600,000 ms,
+  `prune-audit-logs` every 86,400,000 ms.
+
+**Still outstanding — needs push access to `aqillakhani/punchclock-pro`:**
+
+PR #4 is green, mergeable and clean, but **not merged**. `main` therefore does not yet
+contain the deployed code, which matters for two reasons: the website is still built
+from the old `main` (so the new screens are missing), and **anyone redeploying from
+`main` today would roll the API backwards**. Merge it, and Vercel rebuilds the web on
+its own.
+
+The deploy command, for next time — **migration first, or every punch breaks**:
+
 ```bash
-# 1. apply migration 008 over the proxy, THEN
+# 1. flyctl proxy 15432:5432 -a punchclock-db   (leave running)
+# 2. OWNER_DATABASE_URL=... pnpm --filter @punchclock/api db:migrate
+# 3. then, and only then:
 flyctl deploy . --remote-only \
   --config packages/api/fly.toml \
   --dockerfile packages/api/Dockerfile \
   --env APP_VERSION=$(git rev-parse --short HEAD)
 ```
+
 Fly prints a spurious *"app is not listening on the expected address"* during rollout;
 it checks before Node finishes booting. Confirm with `/health`, not with that warning.
 
-Web deploys itself from `main` via Vercel's Git integration.
+If `flyctl` reports no access token, the one cached at `~/.fly/config.yml` still works —
+export it as `FLY_API_TOKEN` rather than re-running `flyctl auth login`.
 
 ### Repository map
 | Document | Covers |
@@ -347,7 +394,8 @@ Web deploys itself from `main` via Vercel's Git integration.
 ### Recommended before you rely on this
 
 1. Put every credential in a shared password manager. Today.
-2. Deploy PR #4 (above) — it closes the forgotten-punch trap and a real data-loss bug.
+2. **Merge PR #4** so `main` matches what is deployed and the web picks up the new
+   screens. Until then a redeploy from `main` silently rolls the API back.
 3. Point an uptime monitor at `https://punchclock-api.fly.dev/health` with alerts to a
    real phone.
 4. Add a nightly `pg_dump` to off-box storage, then **actually rehearse a restore.**
