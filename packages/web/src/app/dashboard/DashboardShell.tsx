@@ -317,7 +317,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                 You don&apos;t have access to this page
               </h1>
               <p className="mb-6 text-sm text-slate-600">
-                Your account is a {me.data.role}. Ask an owner if you need access.
+                Your account is {/^[aeiou]/i.test(me.data.role) ? 'an' : 'a'} {me.data.role}. Ask an
+                owner if you need access.
               </p>
               <button
                 type="button"
