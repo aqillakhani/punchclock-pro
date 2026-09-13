@@ -320,14 +320,14 @@ await go('/dashboard/settings');
 const sUrl = new URL(page.url()).pathname;
 const sBody = await body();
 await shot('18-worker-settings-blocked');
-(sUrl !== '/dashboard/settings' || /not allowed|forbidden|permission|denied|403/i.test(sBody))
+(sUrl !== '/dashboard/settings' || /don'?t have access|not allowed|forbidden|permission denied|403/i.test(sBody))
   ? pass('Worker blocked from Settings by direct URL', `landed ${sUrl}`)
   : fail('Worker blocked from Settings by direct URL', 'settings rendered for an employee');
 
 await go('/dashboard/audit-log');
 const aUrl = new URL(page.url()).pathname;
 const aBody = await body();
-(aUrl !== '/dashboard/audit-log' || /not allowed|forbidden|permission|denied|403/i.test(aBody))
+(aUrl !== '/dashboard/audit-log' || /don'?t have access|not allowed|forbidden|permission denied|403/i.test(aBody))
   ? pass('Worker blocked from Audit log by direct URL', `landed ${aUrl}`)
   : fail('Worker blocked from Audit log by direct URL', 'audit log rendered for an employee');
 
