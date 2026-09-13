@@ -303,7 +303,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
         <div className="p-8">
-          {me.data && !canOpenPath(me.data.role, pathname) ? (
+          {/*
+            Hold the page until the role is known. Rendering `children` while
+            `me` is still in flight showed an owner-only screen for a beat
+            before the guard below removed it — the API refuses the data either
+            way, but the flash is confusing and looks like a bug.
+          */}
+          {me.isPending ? (
+            <div className="py-16 text-center text-sm text-slate-500">Loading…</div>
+          ) : me.data && !canOpenPath(me.data.role, pathname) ? (
             <div className="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center">
               <h1 className="mb-2 text-lg font-semibold text-slate-900">
                 You don&apos;t have access to this page
