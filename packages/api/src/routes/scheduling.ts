@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { Router } from 'express';
-import { PERMISSIONS, copyWeekSchema, shiftCreateSchema } from '@punchclock/shared';
+import { PERMISSIONS, can, copyWeekSchema, shiftCreateSchema } from '@punchclock/shared';
 import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
@@ -168,12 +168,18 @@ schedulingRouter.get(
     if (!db || !req.user) throw AppError.unauthorized();
     const from = typeof req.query.from === 'string' ? req.query.from : null;
     const to = typeof req.query.to === 'string' ? req.query.to : null;
-    const userId =
-      typeof req.query.userId === 'string'
-        ? req.query.userId
-        : req.user.role === 'employee'
-          ? req.user.userId
-          : null;
+    // Asking for somebody else's schedule needs `view:schedule`. Without this
+    // check a `?userId=` on the query string walked straight past the
+    // employee self-scoping below and returned any coworker's shifts.
+    const requestedUserId = typeof req.query.userId === 'string' ? req.query.userId : null;
+    if (
+      requestedUserId &&
+      requestedUserId !== req.user.userId &&
+      !can(req.user.role, PERMISSIONS.VIEW_SCHEDULE)
+    ) {
+      throw AppError.forbidden('You can only view your own shifts');
+    }
+    const userId = requestedUserId ?? (req.user.role === 'employee' ? req.user.userId : null);
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (from) {

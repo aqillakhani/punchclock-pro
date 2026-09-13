@@ -111,12 +111,20 @@ export function requireRole(min: Role): RequestHandler {
  * is not strictly hierarchical — for example, viewers can read
  * timesheets even though `viewer < employee` in the hierarchy.
  */
-export function requirePermission(action: Action): RequestHandler {
-  return (req, _res, next) => {
+export function requirePermission(action: Action): PermissionGuard {
+  const guard: PermissionGuard = (req, _res, next) => {
     if (!req.user) throw AppError.unauthorized();
     if (!can(req.user.role, action)) {
       throw AppError.forbidden(`Missing permission: ${action}`);
     }
     next();
   };
+  // Tagged so the route table can be asserted in tests — see
+  // tests/unit/route-authorization.test.ts. Several routes shipped to
+  // production with no guard at all; this makes their absence visible.
+  guard.requiredPermission = action;
+  return guard;
 }
+
+/** A {@link requirePermission} handler, tagged with the action it enforces. */
+export type PermissionGuard = RequestHandler & { requiredPermission: Action };
