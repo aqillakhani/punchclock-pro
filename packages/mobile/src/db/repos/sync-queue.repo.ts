@@ -38,11 +38,40 @@ export interface SyncQueueRepo {
    * Record a transient failure: bumps retryCount, sets lastRetryAt,
    * stores errorMessage. Caller decides whether to flip the row to
    * 'failed' once retryCount exceeds the policy.
+   *
+   * Only call this when the server actually answered. A request that
+   * never reached the server must not consume an item's retry budget
+   * — see `ServerUnreachable` in sync.service.
    */
   recordRetry(id: string, error: string, now: number): Promise<QueueItem>;
 
+  /**
+   * Return a 'failed' item to the queue with a clean retry budget, so
+   * a punch that exhausted its retries during an outage can still be
+   * delivered instead of being lost. Resolves to the requeued item, or
+   * null when no such row exists.
+   */
+  requeue(id: string): Promise<QueueItem | null>;
+
   clear(): Promise<void>;
 }
+
+/**
+ * Backoff before a server-rejected item is offered to the poster again.
+ *
+ * Read this against the auto-sync tick (60s): a backoff shorter than the
+ * tick gates nothing. The original 1s/2s/4s curve meant three consecutive
+ * ticks exhausted the whole retry budget in about three minutes, so a
+ * brief outage discarded the punch. These steps are minutes, so the
+ * budget spans hours of genuine server-side failure.
+ */
+const RETRY_BACKOFF_MS = [
+  60_000, // 1 min
+  5 * 60_000,
+  15 * 60_000,
+  30 * 60_000,
+  60 * 60_000, // held at 1 hour for every further attempt
+];
 
 /**
  * Backoff in milliseconds for an item that has already failed
@@ -51,5 +80,6 @@ export interface SyncQueueRepo {
  */
 export function backoffFor(retryCount: number): number {
   if (retryCount <= 0) return 0;
-  return 2 ** (retryCount - 1) * 1000;
+  const step = Math.min(retryCount, RETRY_BACKOFF_MS.length) - 1;
+  return RETRY_BACKOFF_MS[step]!;
 }

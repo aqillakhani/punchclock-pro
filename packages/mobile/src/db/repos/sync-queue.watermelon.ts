@@ -54,9 +54,7 @@ export class WatermelonDBSyncQueueRepo implements SyncQueueRepo {
 
   async enqueue(item: NewQueueItem, now: number): Promise<QueueItem> {
     const collection = this.collection();
-    const existing = await collection
-      .query(Q.where('event_id', item.clientGeneratedId))
-      .fetch();
+    const existing = await collection.query(Q.where('event_id', item.clientGeneratedId)).fetch();
     if (existing.length > 0) {
       return modelToItem(existing[0]!);
     }
@@ -151,6 +149,31 @@ export class WatermelonDBSyncQueueRepo implements SyncQueueRepo {
       raw.error_message = error;
     });
     return modelToItem(row);
+  }
+
+  async requeue(id: string): Promise<QueueItem | null> {
+    const existing = await this.collection()
+      .find(id)
+      .catch(() => null);
+    if (!existing) return null;
+
+    let revived = false;
+    await this.db.write(async () => {
+      await existing.update((rec) => {
+        const raw = rec._raw as unknown as MutableRaw;
+        // Re-check inside the write block: a flush running concurrently may
+        // have marked this row 'synced' since the find above, and reviving
+        // a delivered punch would send it twice.
+        if (raw.status !== 'failed') return;
+        raw.status = 'pending';
+        raw.retry_count = 0;
+        raw.last_retry_at = null;
+        raw.error_message = null;
+        revived = true;
+      });
+    });
+
+    return revived ? modelToItem(existing) : null;
   }
 
   async clear(): Promise<void> {

@@ -79,6 +79,12 @@ const NAV: NavItem[] = [
     icon: '☷',
     requires: PERMISSIONS.VIEW_TIMESHEETS,
   },
+  {
+    href: '/dashboard/pay-periods',
+    label: 'Pay periods',
+    icon: '◈',
+    requires: PERMISSIONS.VIEW_PAY_PERIODS,
+  },
   { href: '/dashboard/reports', label: 'Reports', icon: '◔', requires: PERMISSIONS.VIEW_REPORTS },
   {
     href: '/dashboard/audit-log',
@@ -103,6 +109,28 @@ const NAV: NavItem[] = [
 export function visibleNavFor(role: Role | undefined): NavItem[] {
   if (!role) return [];
   return NAV.filter((item) => can(role, item.requires));
+}
+
+/**
+ * Whether `role` may open `pathname`, using the same NAV table that builds the
+ * sidebar. Hiding a tab is not access control: an employee who typed
+ * /dashboard/settings still got the page shell, and the empty form it rendered
+ * looked like a broken app. The API refuses the data either way — this just
+ * makes the refusal legible. Unlisted paths are allowed so new pages are not
+ * silently blocked.
+ */
+export function canOpenPath(role: Role | undefined, pathname: string): boolean {
+  if (!role) return false;
+  const match = NAV.filter(
+    (item) =>
+      pathname === item.href ||
+      // '/dashboard' is the Overview page, not a namespace — treating it as a
+      // prefix would gate every unlisted sub-path behind view:overview.
+      (item.href !== '/dashboard' && pathname.startsWith(item.href + '/')),
+  )
+    // longest match wins, so /dashboard/settings beats a shorter sibling
+    .sort((a, b) => b.href.length - a.href.length)[0];
+  return match ? can(role, match.requires) : true;
 }
 
 interface CorrectionBadgeData {
@@ -274,7 +302,27 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         )}
-        <div className="p-8">{children}</div>
+        <div className="p-8">
+          {me.data && !canOpenPath(me.data.role, pathname) ? (
+            <div className="mx-auto max-w-md rounded-lg border border-slate-200 bg-white p-8 text-center">
+              <h1 className="mb-2 text-lg font-semibold text-slate-900">
+                You don&apos;t have access to this page
+              </h1>
+              <p className="mb-6 text-sm text-slate-600">
+                Your account is a {me.data.role}. Ask an owner if you need access.
+              </p>
+              <button
+                type="button"
+                onClick={() => router.push(visibleNav[0]?.href ?? '/dashboard/clock')}
+                className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+              >
+                Go to {visibleNav[0]?.label ?? 'Clock In/Out'}
+              </button>
+            </div>
+          ) : (
+            children
+          )}
+        </div>
       </main>
     </div>
   );

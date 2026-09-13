@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Role } from '@punchclock/shared';
-import { visibleNavFor } from '@/app/dashboard/DashboardShell';
+import { canOpenPath, visibleNavFor } from '@/app/dashboard/DashboardShell';
 
 /**
  * Phase A acceptance gate (sidebar half) lives here. We assert the
@@ -43,6 +43,7 @@ describe('DashboardShell sidebar gating', () => {
     expect(labels).toContain('Team');
     expect(labels).toContain('Schedule');
     expect(labels).toContain('Timesheets');
+    expect(labels).toContain('Pay periods');
     expect(labels).toContain('Reports');
     // Owner-only.
     expect(labels).not.toContain('Settings');
@@ -64,6 +65,7 @@ describe('DashboardShell sidebar gating', () => {
       'Team',
       'Schedule',
       'Timesheets',
+      'Pay periods',
       'Reports',
       'Audit log',
       'Preview as…',
@@ -74,6 +76,59 @@ describe('DashboardShell sidebar gating', () => {
   });
 
   it('limits the viewer to read-only oversight surfaces', () => {
-    expect(labelsFor('viewer')).toEqual(['Overview', 'Team', 'Schedule', 'Timesheets', 'Reports']);
+    expect(labelsFor('viewer')).toEqual([
+      'Overview',
+      'Team',
+      'Schedule',
+      'Timesheets',
+      'Pay periods',
+      'Reports',
+    ]);
+  });
+});
+
+/**
+ * Hiding a sidebar tab is not access control. An employee who typed
+ * /dashboard/settings straight into the address bar still got the settings
+ * shell rendered (the API refused the data, so it looked like a broken page).
+ * `canOpenPath` is what the shell now consults before rendering a page.
+ */
+describe('canOpenPath', () => {
+  it('lets an owner open the owner-only pages', () => {
+    expect(canOpenPath('owner', '/dashboard/settings')).toBe(true);
+    expect(canOpenPath('owner', '/dashboard/audit-log')).toBe(true);
+    expect(canOpenPath('owner', '/dashboard/reports')).toBe(true);
+  });
+
+  it('blocks an employee from owner-only pages', () => {
+    expect(canOpenPath('employee', '/dashboard/settings')).toBe(false);
+    expect(canOpenPath('employee', '/dashboard/audit-log')).toBe(false);
+    expect(canOpenPath('employee', '/dashboard/team')).toBe(false);
+    expect(canOpenPath('employee', '/dashboard/reports')).toBe(false);
+  });
+
+  it('still lets an employee open their own pages', () => {
+    expect(canOpenPath('employee', '/dashboard/clock')).toBe(true);
+    expect(canOpenPath('employee', '/dashboard/my-timesheet')).toBe(true);
+    expect(canOpenPath('employee', '/dashboard/time-off')).toBe(true);
+  });
+
+  it('blocks a viewer from the clock, which they may not use', () => {
+    expect(canOpenPath('viewer', '/dashboard/clock')).toBe(false);
+    expect(canOpenPath('viewer', '/dashboard/timesheets')).toBe(true);
+  });
+
+  it('matches the longest prefix, so a sub-path is not granted by /dashboard', () => {
+    // '/dashboard' requires only view:overview; without longest-prefix matching
+    // an employee would inherit access to every /dashboard/* page.
+    expect(canOpenPath('employee', '/dashboard/settings')).toBe(false);
+  });
+
+  it('allows an unlisted path rather than silently blocking a new page', () => {
+    expect(canOpenPath('employee', '/dashboard/something-new')).toBe(true);
+  });
+
+  it('denies everything when the role is unknown', () => {
+    expect(canOpenPath(undefined, '/dashboard/clock')).toBe(false);
   });
 });

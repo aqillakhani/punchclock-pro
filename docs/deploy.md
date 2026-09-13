@@ -6,7 +6,7 @@ Single-tenant production deploy. Stack chosen in `docs/plans/2026-05-21-producti
 |---|---|---|
 | API (Express + Socket.io) | **Fly.io** | Persistent machine, region `ord`. `packages/api/Dockerfile` + `fly.toml`. |
 | Web (Next.js) | **Vercel** | Root directory `packages/web`. Native Git integration. |
-| Postgres | **Neon** | Pooled connection; daily PITR on free tier. |
+| Postgres | **Fly.io (self-hosted)** | Postgres 16 + TimescaleDB + PostGIS, app `punchclock-db`, private network only. Image in `deploy/db/`. **Not** Neon/Supabase — see 2a. |
 | Redis | **none** | Not deployed. Only needed to fan Socket.io broadcasts across instances once the API runs on more than one machine — the adapter is already wired and activates when `REDIS_URL` is set. `/health` reports `redis: "disabled"` until then. |
 | Documents | **Cloudflare R2** | S3-compatible. Optional until document upload is enabled. |
 | Email | **Resend** | `EMAIL_PROVIDER=resend`; until then emails are logged, not sent. |
@@ -25,7 +25,7 @@ Create accounts and capture the secret each one produces. Drop them in a passwor
 - [ ] **Domain** (e.g. via Cloudflare Registrar). Decide on `punchclock.<domain>.com` (web) and `api.punchclock.<domain>.com` (API).
 - [ ] **Fly.io** — `flyctl auth signup`; run `flyctl auth token` for CI. → `FLY_API_TOKEN`
 - [ ] **Vercel** — sign up, install the GitHub app on this repo.
-- [ ] **Neon** — create a project. Copy the **pooled** connection string (ends with `-pooler`, append `?sslmode=require`). → `DATABASE_URL`
+- [ ] **Postgres** — nothing to sign up for; it is a second Fly app you deploy from `deploy/db/` in step 2a.
 - [ ] **Redis — not required.** The API runs single-instance without it (Socket.io uses its in-memory adapter; `/health` reports `redis: "disabled"`). Only when you scale past one API machine do you need one — see [Scaling past one API instance](#scaling-past-one-api-instance).
 - [ ] **Cloudflare R2** — create a bucket + an S3 API token. → `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` (only needed once document upload is enabled)
 - [ ] **Resend** — verify your sending domain, create an API key. → `RESEND_API_KEY`, set `EMAIL_FROM="PunchClock Pro <noreply@punchclock.<domain>.com>"`
@@ -40,11 +40,36 @@ The full variable reference lives in [`.env.example`](../.env.example).
 
 ### 2a. Provision the database
 
+The schema needs **timescaledb** (hypertables on `time_entry_events` and
+`audit_logs`) and **postgis** (geofencing). Neon and Supabase support neither,
+so a managed provider would crash on the first `create_hypertable`. The database
+is therefore a second Fly app we host ourselves.
+
 ```bash
-# Run migrations against prod (from your machine, pointed at Neon).
-DATABASE_URL="<neon-pooled-url>" pnpm --filter @punchclock/api db:migrate
+# Deploy the database app (Postgres 16 + TimescaleDB + PostGIS).
+flyctl launch --no-deploy --config deploy/db/fly.toml --copy-config   # first time only
+flyctl volumes create pcp_db_data --size 3 --region ord -a punchclock-db
+flyctl secrets set POSTGRES_PASSWORD="<openssl rand -base64 32>" -a punchclock-db
+flyctl deploy deploy/db --config deploy/db/fly.toml
+
+# It is private-only, so reach it through a proxy to migrate.
+flyctl proxy 15432:5432 -a punchclock-db    # leave running in another shell
+DATABASE_URL="postgres://punchclock:<pw>@localhost:15432/punchclock" \
+  DATABASE_SSL=true pnpm --filter @punchclock/api db:migrate
+
+# Then create the least-privilege role the API actually runs as. The
+# bootstrap superuser silently bypasses every RLS policy, which is the
+# tenant boundary — never point the API at it.
+APP_DB_PASSWORD="<openssl rand -base64 32>" \
+  OWNER_DATABASE_URL="postgres://punchclock:<pw>@localhost:15432/punchclock" \
+  DATABASE_SSL=true pnpm --filter @punchclock/api db:create-app-role
+
 # Do NOT run db:seed (that's demo data). Production seeding is step 2e.
 ```
+
+> **Put no `sslmode` in `DATABASE_URL`.** Recent `pg` reads `sslmode=require`
+> as `verify-full` and rejects the self-signed certificate. TLS is driven by
+> `DATABASE_SSL=true` instead.
 
 ### 2b. Deploy the API to Fly
 
@@ -54,7 +79,7 @@ lockfile + the shared package), so always deploy from the repo root:
 ```bash
 flyctl launch --no-deploy --config packages/api/fly.toml --copy-config   # first time only
 flyctl secrets set --config packages/api/fly.toml \
-  DATABASE_URL="<neon-pooled-url>" \
+  DATABASE_URL="postgres://punchclock_app:<pw>@punchclock-db.internal:5432/punchclock" \
   JWT_SECRET="<openssl-output>" \
   CORS_ALLOWED_ORIGINS="https://punchclock.<domain>.com" \
   WEB_APP_URL="https://punchclock.<domain>.com" \
@@ -100,7 +125,7 @@ It reads `"up"` only once you have set `REDIS_URL`.
 ```bash
 SEED_GEOFENCE_NAME="Main Store" \
 SEED_GEOFENCE_LAT="29.76" SEED_GEOFENCE_LNG="-95.37" SEED_GEOFENCE_RADIUS_M="150" \
-DATABASE_URL="<neon-pooled-url>" pnpm --filter @punchclock/api db:seed:prod
+DATABASE_URL="postgres://punchclock_app:<pw>@localhost:15432/punchclock" pnpm --filter @punchclock/api db:seed:prod
 ```
 
 3. Sign in → the dashboard renders. Invite a worker (leave the password blank to email them a setup link).
@@ -125,14 +150,26 @@ After editing `packages/shared`, remember `pnpm --filter @punchclock/shared buil
 
 ---
 
-## 5. Restoring from backup (Neon)
+## 5. Restoring from backup (Fly volume snapshots)
 
-1. Neon console → your project → **Branches** → create a branch from a point in time (or use **Restore**).
-2. Copy the new branch's pooled connection string.
-3. `flyctl secrets set DATABASE_URL="<branch-url>" --config packages/api/fly.toml` (triggers a redeploy), and update `DATABASE_URL` in Vercel if the web ever reads it.
-4. Verify, then optionally promote the branch to primary.
+The data lives on the `pcp_db_data` volume, which Fly snapshots daily and keeps
+for 5 days. There is no point-in-time restore — you recover to a snapshot.
 
-Drill this once before launch: snapshot → mutate a row → restore → confirm it reverted.
+```bash
+flyctl volumes list -a punchclock-db
+flyctl volumes snapshots list <volume-id>
+# Restore creates a NEW volume from the snapshot.
+flyctl volumes create pcp_db_data --snapshot-id <snapshot-id> --size 3 --region ord -a punchclock-db
+# Point the db machine at the restored volume, then confirm the API reconnects.
+flyctl status -a punchclock-db
+curl -s https://punchclock-api.fly.dev/health
+```
+
+5 days of retention is the whole safety net, and it is short. For anything
+longer, add a periodic `pg_dump` to off-box storage.
+
+**Drill this before you rely on it:** snapshot → mutate a row → restore →
+confirm it reverted. An untested restore is not a backup.
 
 ---
 
@@ -146,8 +183,55 @@ Drill this once before launch: snapshot → mutate a row → restore → confirm
 
 ## 7. Scheduled jobs
 
-- **Audit-log pruning:** `pnpm --filter @punchclock/api db:prune-audit` deletes audit rows past each org's `audit_logs_retention_days` (default 365). Schedule it daily — e.g. a Fly scheduled machine:
-  `flyctl machine run . --schedule daily --config packages/api/fly.toml --command "pnpm --filter @punchclock/api db:prune-audit"` (or an external cron hitting a one-off machine).
+**These run automatically inside the API process — there is nothing to set up.**
+`packages/api/src/jobs/` registers them at boot and `startScheduler` puts each on
+its own timer. Earlier versions of this runbook told you to create a Fly
+scheduled machine by hand; that step was never done, so audit-log pruning never
+actually ran. The schedule now ships with the code.
+
+| Job | Default cadence | What it does |
+|---|---|---|
+| `auto-clock-out` | hourly | Closes punches left open past the org's `auto_clock_out_minutes` cap. Without it a forgotten punch-out **blocks that worker's next punch-in** (the partial unique index allows only one open entry each). |
+| `prune-audit-logs` | daily | Deletes audit rows past each org's `audit_logs_retention_days` (default 365). |
+
+Both are safe to run on more than one machine: each pass takes a Postgres
+advisory lock (`pg_try_advisory_xact_lock`) and a second machine simply logs
+`scheduled job skipped` and moves on. The lock is transaction-scoped, so a job
+that throws still releases it.
+
+Auto clock-out derives the close time from `punch_in + cap`, not from when the
+sweep runs, so a late pass writes exactly the same rows as a punctual one — a
+missed window only delays when the worker sees the correction.
+
+**Tuning** (Fly secrets or `[env]` in `packages/api/fly.toml`):
+
+```
+AUTO_CLOCK_OUT_INTERVAL_MINUTES=60      # default 60
+AUDIT_LOG_PRUNE_INTERVAL_MINUTES=1440   # default 1440 (daily)
+SCHEDULED_JOBS_INITIAL_DELAY_SECONDS=30 # grace period after boot
+SCHEDULED_JOBS_ENABLED=false            # only if driving the CLIs externally
+```
+
+**Verifying it works** — after a deploy, the boot log lists what was registered
+and each pass logs its outcome:
+
+```bash
+flyctl logs -a punchclock-api | grep 'scheduled job'
+# scheduled job registered   {"job":"auto-clock-out","intervalMs":3600000}
+# scheduled job registered   {"job":"prune-audit-logs","intervalMs":86400000}
+# scheduled job ran          {"job":"auto-clock-out","durationMs":41,"result":{"closed":0}}
+```
+
+Seeing no `scheduled job ran` line within `SCHEDULED_JOBS_INITIAL_DELAY_SECONDS`
+of a boot means scheduling is off or the machine is not staying up — check
+`SCHEDULED_JOBS_ENABLED` and `min_machines_running`.
+
+**Running one by hand** (backfill, or while `SCHEDULED_JOBS_ENABLED=false`):
+
+```bash
+pnpm --filter @punchclock/api db:auto-clock-out
+pnpm --filter @punchclock/api db:prune-audit
+```
 
 ---
 

@@ -11,6 +11,10 @@ import {
 export const uuidSchema = z.string().uuid();
 export const isoTimestampSchema = z.string().datetime({ offset: true });
 
+/** Plain calendar date, YYYY-MM-DD. Declared up here because schemas
+ *  throughout the file reference it at module-evaluation time. */
+const ymdRegex = /^\d{4}-\d{2}-\d{2}$/;
+
 export const geoPointSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180),
@@ -193,6 +197,18 @@ export const organizationUpdateSchema = z.object({
   // Punch verification multi-select + CIDR ranges
   punchVerificationMethods: z.array(verificationMethodSchema).max(4).optional(),
   allowedPunchCidrs: z.array(cidrSchema).max(50).optional(),
+  // Payroll calendar. `payPeriodAnchorDate` is any date known to be the
+  // FIRST day of a period; every other boundary derives from it.
+  payPeriodType: z.enum(['weekly', 'biweekly', 'semimonthly', 'monthly']).optional(),
+  payPeriodAnchorDate: z
+    .string()
+    .regex(ymdRegex, 'payPeriodAnchorDate must be YYYY-MM-DD')
+    .optional(),
+  // Null disables auto clock-out. The floor of 60 minutes stops a
+  // typo from closing everyone's shift the moment they punch in; the
+  // ceiling is a full day.
+  autoClockOutMinutes: z.number().int().min(60).max(1440).nullable().optional(),
+
   // Feature flags (B7 + Phase D)
   featureCashDrawer: z.boolean().optional(),
   featureKioskQr: z.boolean().optional(),
@@ -204,8 +220,6 @@ export const organizationUpdateSchema = z.object({
 });
 
 // ---- Time-off + shift trades (v2 self-service) ----
-
-const ymdRegex = /^\d{4}-\d{2}-\d{2}$/;
 
 export const timeOffRequestSchema = z
   .object({
@@ -385,6 +399,27 @@ export const timeEntryCreateSchema = z
     message: 'The end time must be after the start time',
     path: ['punchOutAt'],
   });
+
+/**
+ * Lock or unlock a pay period. The period is identified by its start
+ * date — boundaries are derived from the org's schedule, so the start
+ * date alone is unambiguous.
+ *
+ * Unlocking requires a reason: it reopens dates payroll may already have
+ * paid, and whoever does it should have to say why.
+ */
+export const payPeriodLockSchema = z.object({
+  startDate: z.string().regex(ymdRegex, 'startDate must be YYYY-MM-DD'),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const payPeriodUnlockSchema = z.object({
+  startDate: z.string().regex(ymdRegex, 'startDate must be YYYY-MM-DD'),
+  reason: z.string().trim().min(1, 'Say why this period is being reopened').max(500),
+});
+
+export type PayPeriodLockInput = z.infer<typeof payPeriodLockSchema>;
+export type PayPeriodUnlockInput = z.infer<typeof payPeriodUnlockSchema>;
 
 export type CorrectionRequestInput = z.infer<typeof correctionRequestSchema>;
 export type CorrectionDecisionInput = z.infer<typeof correctionDecisionSchema>;

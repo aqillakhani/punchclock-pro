@@ -13,13 +13,34 @@ export interface ServerConflict {
   reason: string;
 }
 
+/**
+ * The server answered, and answered with a failure — a 5xx, a bad
+ * gateway body, anything that might succeed later. Consumes retry budget.
+ */
 export interface ServerTransient {
   ok: false;
   kind: 'transient';
   error: string;
 }
 
-export type ServerResult = ServerAck | ServerConflict | ServerTransient;
+/**
+ * The request never reached the API at all: no network, DNS or TLS
+ * failure, or a client-side timeout. Distinct from `transient` because
+ * the server never saw the operation, and because the phone may sit in
+ * this state for days.
+ *
+ * Time spent offline must cost an item nothing. Counting it as a failure
+ * is what let a worker who punched out of coverage lose the punch a few
+ * minutes later — the whole point of an offline-first queue is that the
+ * punch survives exactly this situation.
+ */
+export interface ServerUnreachable {
+  ok: false;
+  kind: 'unreachable';
+  error: string;
+}
+
+export type ServerResult = ServerAck | ServerConflict | ServerTransient | ServerUnreachable;
 
 /**
  * Posts a queued operation to the server. Implementations must
@@ -42,16 +63,30 @@ export interface FlushSummary {
   conflicts: number;
   retried: number;
   failed: number;
+  /** Pending, but still inside its backoff window. */
   skipped: number;
+  /** Eligible, but left untouched because the server was unreachable. */
+  deferred: number;
 }
 
 export interface SyncService {
   enqueue(item: NewQueueItem): Promise<QueueItem>;
   flush(): Promise<FlushSummary>;
   queueSize(): Promise<number>;
+  /** Items that exhausted their retry budget and need attention. */
+  failedCount(): Promise<number>;
+  /** Return every failed item to the queue. Resolves to how many moved. */
+  retryFailed(): Promise<number>;
 }
 
-const DEFAULT_MAX_RETRIES = 3;
+/**
+ * Attempts against a *responding* server before an item is parked as
+ * 'failed'. Paired with the minutes-long backoff schedule this spans
+ * several hours, and parking is no longer terminal — `retryFailed()`
+ * puts items back — so the cap protects the queue from a poison pill
+ * without ever silently discarding a punch.
+ */
+const DEFAULT_MAX_RETRIES = 8;
 
 export function createSyncService(deps: SyncDeps): SyncService {
   const { repo, poster, now, maxRetries = DEFAULT_MAX_RETRIES } = deps;
@@ -65,6 +100,19 @@ export function createSyncService(deps: SyncDeps): SyncService {
       return repo.countByStatus('pending');
     },
 
+    async failedCount() {
+      return repo.countByStatus('failed');
+    },
+
+    async retryFailed() {
+      const failed = await repo.listByStatus('failed');
+      let moved = 0;
+      for (const item of failed) {
+        if (await repo.requeue(item.id)) moved += 1;
+      }
+      return moved;
+    },
+
     async flush() {
       const summary: FlushSummary = {
         synced: 0,
@@ -72,13 +120,15 @@ export function createSyncService(deps: SyncDeps): SyncService {
         retried: 0,
         failed: 0,
         skipped: 0,
+        deferred: 0,
       };
       const t = now();
       const eligible = await repo.listEligible(t);
       const totalPending = await repo.countByStatus('pending');
       summary.skipped = totalPending - eligible.length;
 
-      for (const item of eligible) {
+      for (let i = 0; i < eligible.length; i += 1) {
+        const item = eligible[i]!;
         const result = await poster(item);
         if (result.ok) {
           await repo.markSynced(item.id, result.serverId);
@@ -89,6 +139,15 @@ export function createSyncService(deps: SyncDeps): SyncService {
           await repo.markConflict(item.id, result.reason);
           summary.conflicts += 1;
           continue;
+        }
+        if (result.kind === 'unreachable') {
+          // The network is down, not the item. Leave this item and every
+          // one behind it exactly as they are — untouched retryCount,
+          // untouched lastRetryAt — and try the whole batch again next
+          // tick. Stopping early also matters on a dead network: each
+          // further post would just burn its full client timeout.
+          summary.deferred = eligible.length - i;
+          break;
         }
         const updated = await repo.recordRetry(item.id, result.error, t);
         if (updated.retryCount >= maxRetries) {
@@ -150,10 +209,16 @@ export function startAutoSync(intervalMs = 60_000): () => void {
     try {
       const summary = await service.flush();
       const remaining = await service.queueSize();
+      const failed = await service.failedCount();
       store.setQueueSize(remaining);
-      store.setLastSyncedAt(Date.now());
-      const errored = summary.failed > 0 || summary.conflicts > 0;
-      store.setStatus(remaining > 0 ? 'syncing' : errored ? 'error' : 'synced');
+      store.setFailedCount(failed);
+      // Only a tick that actually reached the server counts as a sync;
+      // otherwise "last synced" would tick forward all through an outage.
+      if (summary.deferred === 0) store.setLastSyncedAt(Date.now());
+
+      if (summary.deferred > 0) store.setStatus('offline');
+      else if (failed > 0 || summary.conflicts > 0) store.setStatus('error');
+      else store.setStatus(remaining > 0 ? 'syncing' : 'synced');
     } catch {
       store.setStatus('error');
     }

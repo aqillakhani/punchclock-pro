@@ -15,6 +15,9 @@ interface OrgInfo {
   allowed_punch_cidrs: string[];
   feature_predictive_scheduling: boolean;
   weekly_labor_budget: string | null;
+  pay_period_type: 'weekly' | 'biweekly' | 'semimonthly' | 'monthly';
+  pay_period_anchor_date: string;
+  auto_clock_out_minutes: number | null;
 }
 
 type VerificationMethod = 'selfie' | 'pin' | 'ip' | 'device';
@@ -104,6 +107,15 @@ export default function SettingsPage() {
       setCidrText((org.data.allowed_punch_cidrs ?? []).join('\n'));
       setPredictiveOn(!!org.data.feature_predictive_scheduling);
       setWeeklyBudget(org.data.weekly_labor_budget ?? '');
+      setPayPeriodType(org.data.pay_period_type);
+      setPayPeriodAnchorDate(org.data.pay_period_anchor_date);
+      if (org.data.auto_clock_out_minutes) {
+        setAutoClockOutEnabled(true);
+        setAutoClockOutHours(String(org.data.auto_clock_out_minutes / 60));
+      } else {
+        setAutoClockOutEnabled(false);
+        setAutoClockOutHours('');
+      }
     }
   }, [org.data]);
 
@@ -160,6 +172,14 @@ export default function SettingsPage() {
     onError: (e: Error) => setOrgMessage(e.message),
   });
 
+  const [payPeriodType, setPayPeriodType] = useState<
+    'weekly' | 'biweekly' | 'semimonthly' | 'monthly'
+  >('weekly');
+  const [payPeriodAnchorDate, setPayPeriodAnchorDate] = useState('');
+  const [autoClockOutHours, setAutoClockOutHours] = useState('');
+  const [autoClockOutEnabled, setAutoClockOutEnabled] = useState(false);
+  const [payrollMessage, setPayrollMessage] = useState<string | null>(null);
+
   const [newGeofence, setNewGeofence] = useState<NewGeofenceForm>({
     name: '',
     latitude: '',
@@ -196,6 +216,25 @@ export default function SettingsPage() {
   const deleteGeofence = useMutation({
     mutationFn: (id: string) => apiClient.delete(`/api/v1/geofence/locations/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['geofence', 'list'] }),
+  });
+
+  const savePayroll = useMutation({
+    mutationFn: (input: {
+      payPeriodType: string;
+      payPeriodAnchorDate: string;
+      autoClockOutMinutes: number | null;
+    }) =>
+      apiClient.patch('/api/v1/admin/organization', {
+        payPeriodType: input.payPeriodType,
+        payPeriodAnchorDate: input.payPeriodAnchorDate,
+        autoClockOutMinutes: input.autoClockOutMinutes,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'organization'] });
+      setPayrollMessage('Saved');
+      setTimeout(() => setPayrollMessage(null), 2000);
+    },
+    onError: (e: Error) => setPayrollMessage(e.message),
   });
 
   return (
@@ -375,6 +414,129 @@ export default function SettingsPage() {
             {verifyMessage && <span className="text-sm text-emerald-600">{verifyMessage}</span>}
             <button type="submit" disabled={saveVerification.isPending} className={btnPrimary}>
               {saveVerification.isPending ? 'Saving…' : 'Save verification'}
+            </button>
+          </div>
+        </form>
+      </Section>
+
+      <Section title="Payroll & shifts" subtitle="Pay period schedule and auto clock-out settings.">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPayrollMessage(null);
+            // The API takes whole minutes. Rounding matters: 1.7 hours is
+            // 102.00000000000001 in floating point, which fails the
+            // integer check and comes back as a confusing 422.
+            const minutes = autoClockOutEnabled ? Math.round(Number(autoClockOutHours) * 60) : null;
+            if (autoClockOutEnabled) {
+              if (!autoClockOutHours || Number.isNaN(Number(autoClockOutHours))) {
+                setPayrollMessage('Auto clock-out hours must be a valid number.');
+                return;
+              }
+              if (minutes === null || minutes < 60 || minutes > 1440) {
+                setPayrollMessage('Auto clock-out must be between 1 and 24 hours.');
+                return;
+              }
+            }
+            savePayroll.mutate({
+              payPeriodType,
+              payPeriodAnchorDate,
+              autoClockOutMinutes: minutes,
+            });
+          }}
+          className="space-y-4"
+        >
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field label="Pay period type">
+              <select
+                value={payPeriodType}
+                onChange={(e) =>
+                  setPayPeriodType(
+                    e.target.value as 'weekly' | 'biweekly' | 'semimonthly' | 'monthly',
+                  )
+                }
+                className={inputClass}
+              >
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Every two weeks</option>
+                <option value="semimonthly">Twice a month</option>
+                <option value="monthly">Monthly</option>
+              </select>
+            </Field>
+            <Field label="First day of pay period">
+              <input
+                type="date"
+                value={payPeriodAnchorDate}
+                onChange={(e) => setPayPeriodAnchorDate(e.target.value)}
+                className={inputClass}
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                {payPeriodType === 'semimonthly'
+                  ? 'Not used — twice-a-month periods always run the 1st–15th and 16th–end of month.'
+                  : payPeriodType === 'monthly'
+                    ? 'Not used — monthly periods always run the 1st to the end of the month.'
+                    : 'Pick any date that is the first day of a pay period. Every other boundary is calculated from it, forwards and backwards.'}
+              </span>
+            </Field>
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                checked={autoClockOutEnabled}
+                onChange={(e) => setAutoClockOutEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-200"
+              />
+              <span>
+                <span className="block text-sm font-medium text-slate-900">Auto clock-out</span>
+                <span className="block text-xs text-slate-500">
+                  Closes a shift left running past the limit — at the limit itself, not at the time
+                  we notice, so nobody is paid for the gap. The entry is flagged and the worker can
+                  request a correction with the real time. Off by default, because turning it on
+                  changes what people are paid.
+                </span>
+              </span>
+            </label>
+            {autoClockOutEnabled && (
+              <div className="mt-3 ml-7">
+                <Field label="Clock-out after (hours)">
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="24"
+                    value={autoClockOutHours}
+                    onChange={(e) => setAutoClockOutHours(e.target.value)}
+                    className={inputClass}
+                    placeholder="8"
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">
+                    Entries open longer than this duration are automatically closed at the limit
+                    (1–24 hours).
+                  </span>
+                </Field>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-3">
+            {payrollMessage && (
+              <span
+                className={`text-sm ${payrollMessage.includes('Saved') ? 'text-emerald-600' : 'text-red-700'}`}
+              >
+                {payrollMessage}
+              </span>
+            )}
+            {/* Held until the org has loaded: the fields start on their
+                defaults, so saving early would silently rewrite the
+                payroll calendar with values the owner never chose. */}
+            <button
+              type="submit"
+              disabled={savePayroll.isPending || !org.data}
+              className={btnPrimary}
+            >
+              {savePayroll.isPending ? 'Saving…' : !org.data ? 'Loading…' : 'Save'}
             </button>
           </div>
         </form>

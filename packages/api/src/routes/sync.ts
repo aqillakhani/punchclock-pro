@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { EVENT_TYPES, syncBatchRequestSchema } from '@punchclock/shared';
-import { requireAuth } from '../middleware/auth.js';
+import { EVENT_TYPES, PERMISSIONS, can, syncBatchRequestSchema } from '@punchclock/shared';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -23,19 +23,58 @@ syncRouter.get(
     const db = res.locals.db;
     if (!db || !req.user) throw AppError.unauthorized();
     const since = typeof req.query.since === 'string' ? req.query.since : null;
-    const sinceClause = since ? 'WHERE updated_at > $1' : '';
-    const params = since ? [since] : [];
+
+    // RLS scopes these to the organization, which is NOT the same as scoping
+    // them to the caller. Without the per-user predicates below this endpoint
+    // handed any authenticated user — including a read-only viewer — every
+    // coworker's punches, GPS coordinates and breaks, bypassing the same check
+    // that /time-tracking/entries enforces.
+    const seesEveryone = can(req.user.role, PERMISSIONS.VIEW_TIMESHEETS);
+    const seesAllShifts = can(req.user.role, PERMISSIONS.VIEW_SCHEDULE);
+    const seesGeofences = can(req.user.role, PERMISSIONS.EDIT_GEOFENCE);
+
+    // Build each query's predicates independently so the parameter numbering
+    // stays correct whichever combination of filters applies.
+    const build = (scopeToUser: boolean): { clause: string; params: unknown[] } => {
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (since) {
+        params.push(since);
+        where.push(`updated_at > $${params.length}`);
+      }
+      if (scopeToUser) {
+        params.push(req.user!.userId);
+        where.push(`user_id = $${params.length}`);
+      }
+      return { clause: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
+    };
+
+    const entryQ = build(!seesEveryone);
+    const breakQ = build(!seesEveryone);
+    const shiftQ = build(!seesAllShifts);
+    const geoParams: unknown[] = since ? [since] : [];
 
     const [entries, breaks, shifts, geofences] = await Promise.all([
-      db.query(`SELECT * FROM time_entries ${sinceClause} ORDER BY updated_at DESC LIMIT 500`, params),
-      db.query(`SELECT * FROM breaks ${sinceClause} ORDER BY updated_at DESC LIMIT 500`, params),
-      db.query(`SELECT * FROM shifts ${sinceClause} ORDER BY updated_at DESC LIMIT 500`, params),
       db.query(
-        `SELECT id, name, latitude, longitude, radius_meters, enforcement_level, is_active, updated_at
-         FROM geofences WHERE is_active = TRUE ${since ? 'AND updated_at > $1' : ''}
-         ORDER BY updated_at DESC LIMIT 500`,
-        params,
+        `SELECT * FROM time_entries ${entryQ.clause} ORDER BY updated_at DESC LIMIT 500`,
+        entryQ.params,
       ),
+      db.query(
+        `SELECT * FROM breaks ${breakQ.clause} ORDER BY updated_at DESC LIMIT 500`,
+        breakQ.params,
+      ),
+      db.query(
+        `SELECT * FROM shifts ${shiftQ.clause} ORDER BY updated_at DESC LIMIT 500`,
+        shiftQ.params,
+      ),
+      seesGeofences
+        ? db.query(
+            `SELECT id, name, latitude, longitude, radius_meters, enforcement_level, is_active, updated_at
+             FROM geofences WHERE is_active = TRUE ${since ? 'AND updated_at > $1' : ''}
+             ORDER BY updated_at DESC LIMIT 500`,
+            geoParams,
+          )
+        : Promise.resolve({ rows: [] }),
     ]);
 
     ok(res, {
@@ -55,6 +94,9 @@ syncRouter.get(
  */
 syncRouter.post(
   '/batch',
+  // Replays punch_in/punch_out, so it needs the same permission as the direct
+  // punch endpoints — otherwise it is a way around them.
+  requirePermission(PERMISSIONS.PUNCH_CLOCK),
   validateBody(syncBatchRequestSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;

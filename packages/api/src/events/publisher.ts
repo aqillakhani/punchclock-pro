@@ -6,7 +6,8 @@ import { logger } from '../config/logger.js';
 export interface PublishEventInput {
   organizationId: UUID;
   userId: UUID;
-  actorUserId?: UUID;
+  /** Null for system-initiated events (auto clock-out, cron jobs). */
+  actorUserId?: UUID | null;
   eventType: EventType;
   eventData: Record<string, unknown>;
   clientGeneratedId?: string | null;

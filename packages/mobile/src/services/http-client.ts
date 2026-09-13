@@ -52,6 +52,14 @@ export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Pr
       (err as Error & { code?: string }).code = payload.error.code;
       throw err;
     }
+    if (!res.ok) {
+      // The body claims success but the transport disagrees, so a proxy or
+      // gateway rewrote the response somewhere in between. Believing the
+      // body here would mark a queued punch as delivered on the strength
+      // of a 500, and the sync queue would then drop it. Carry no error
+      // code: the caller must treat this as "never reached the API".
+      throw new Error(`HTTP ${res.status}`);
+    }
     return payload.data;
   } finally {
     clearTimeout(timer);

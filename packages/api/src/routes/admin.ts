@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import {
   PERMISSIONS,
   ROLES,
+  can,
   inviteUserSchema,
   organizationUpdateSchema,
   shiftTradeDecisionSchema,
@@ -47,6 +48,24 @@ export const adminRouter = Router();
 
 adminRouter.use(requireAuth(), withTenantDb());
 
+// Everyone authenticated may read this, but only `view:settings` gets the whole
+// row. The Clock In/Out screen needs two fields off it (punch verification
+// methods + the cash-drawer flag), so locking the endpoint outright would stop
+// every worker punching in; instead the payload is trimmed for anyone without
+// the permission. Writes stay owner-only via PATCH below.
+const ORGANIZATION_PUBLIC_FIELDS = [
+  'id',
+  'name',
+  'timezone',
+  'geofencing_enabled',
+  'break_tracking_enabled',
+  'punch_verification_methods',
+  'feature_cash_drawer',
+  'feature_documents',
+  'feature_time_off',
+  'feature_shift_trades',
+] as const;
+
 adminRouter.get(
   '/organization',
   asyncHandler(async (_req, res) => {
@@ -61,10 +80,21 @@ adminRouter.get(
               feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
               feature_documents, feature_time_off, feature_shift_trades,
               feature_push_notifications,
+              pay_period_type,
+              to_char(pay_period_anchor_date, 'YYYY-MM-DD') AS pay_period_anchor_date,
+              auto_clock_out_minutes,
               created_at
        FROM organizations LIMIT 1`,
     );
-    ok(res, rows[0] ?? null);
+    const org = rows[0] ?? null;
+    if (!org) return ok(res, null);
+    const role = _req.user?.role;
+    if (role && can(role, PERMISSIONS.VIEW_SETTINGS)) return ok(res, org);
+    const trimmed: Record<string, unknown> = {};
+    for (const f of ORGANIZATION_PUBLIC_FIELDS) {
+      if (f in org) trimmed[f] = org[f];
+    }
+    ok(res, trimmed);
   }),
 );
 
@@ -88,6 +118,9 @@ adminRouter.patch(
       maxWeeklyMinutes: 'max_weekly_minutes',
       capEnforcement: 'cap_enforcement',
       weeklyLaborBudget: 'weekly_labor_budget',
+      payPeriodType: 'pay_period_type',
+      payPeriodAnchorDate: 'pay_period_anchor_date',
+      autoClockOutMinutes: 'auto_clock_out_minutes',
       featureCashDrawer: 'feature_cash_drawer',
       featureKioskQr: 'feature_kiosk_qr',
       featurePredictiveScheduling: 'feature_predictive_scheduling',
@@ -121,7 +154,10 @@ adminRouter.patch(
                  weekly_labor_budget, punch_verification_methods, allowed_punch_cidrs,
                  feature_cash_drawer, feature_kiosk_qr, feature_predictive_scheduling,
                  feature_documents, feature_time_off, feature_shift_trades,
-                 feature_push_notifications`,
+                 feature_push_notifications,
+                 pay_period_type,
+                 to_char(pay_period_anchor_date, 'YYYY-MM-DD') AS pay_period_anchor_date,
+                 auto_clock_out_minutes`,
       values,
     );
     ok(res, rows[0]);
@@ -148,6 +184,7 @@ adminRouter.get(
 
 adminRouter.get(
   '/team-status',
+  requirePermission(PERMISSIONS.VIEW_OVERVIEW),
   asyncHandler(async (_req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();
@@ -911,7 +948,9 @@ adminRouter.get(
 
 adminRouter.get(
   '/cost-of-labor',
-  requireRole(ROLES.MANAGER),
+  // `view:overview.cost` is owner-only in the matrix; requireRole(MANAGER) also
+  // let managers read the org's labour spend and budget variance.
+  requirePermission(PERMISSIONS.VIEW_OVERVIEW_COST),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();

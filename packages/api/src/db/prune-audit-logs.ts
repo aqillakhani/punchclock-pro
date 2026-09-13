@@ -1,9 +1,10 @@
 /**
  * Audit-log retention pruning.
  *
- * Pure date math + a single bulk DELETE. The runnable entry point lives in
- * `scripts/prune-audit-logs.ts` (invoked as a scheduled Fly machine), which
- * keeps this module import-safe for unit tests.
+ * Pure date math + a single bulk DELETE, so this module stays import-safe for
+ * unit tests. It is driven on a timer by the in-process scheduler
+ * (`jobs/index.ts`, daily by default); `prune-audit-logs-cli.ts` is the manual
+ * entry point for a one-off run.
  */
 import pg from 'pg';
 

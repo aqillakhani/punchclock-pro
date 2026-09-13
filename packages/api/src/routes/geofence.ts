@@ -11,8 +11,12 @@ export const geofenceRouter = Router();
 
 geofenceRouter.use(requireAuth(), withTenantDb());
 
+// Exact store coordinates are configuration, not worker-facing data: only the
+// roles that can edit geofences may list them. Punch-time enforcement happens
+// server-side in evaluateGeofence(), so workers never need this list.
 geofenceRouter.get(
   '/',
+  requirePermission(PERMISSIONS.EDIT_GEOFENCE),
   asyncHandler(async (_req, res) => {
     const db = res.locals.db;
     if (!db) throw AppError.unauthorized();

@@ -98,6 +98,23 @@ export class InMemorySyncQueueRepo implements SyncQueueRepo {
     return updated;
   }
 
+  async requeue(id: string): Promise<QueueItem | null> {
+    const row = this.rows.get(id);
+    // Only a parked item may be revived. Anything else — most importantly
+    // an item a concurrent flush just marked 'synced' — must be left alone,
+    // or a delivered punch would be queued and sent a second time.
+    if (!row || row.status !== 'failed') return null;
+    const updated: QueueItem = {
+      ...row,
+      status: 'pending',
+      retryCount: 0,
+      lastRetryAt: null,
+      errorMessage: null,
+    };
+    this.rows.set(id, updated);
+    return updated;
+  }
+
   async clear(): Promise<void> {
     this.rows.clear();
   }

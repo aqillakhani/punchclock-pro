@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import {
+  PERMISSIONS,
   breakEndRequestSchema,
   breakStartRequestSchema,
   geofenceValidateRequestSchema,
   punchInRequestSchema,
   punchOutRequestSchema,
 } from '@punchclock/shared';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requirePermission } from '../middleware/auth.js';
 import { withTenantDb } from '../middleware/tenant.js';
 import { validateBody } from '../middleware/validation.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -27,6 +28,7 @@ timeTrackingRouter.use(requireAuth(), withTenantDb());
 
 timeTrackingRouter.post(
   '/punch-in',
+  requirePermission(PERMISSIONS.PUNCH_CLOCK),
   validateBody(punchInRequestSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -41,6 +43,7 @@ timeTrackingRouter.post(
 
 timeTrackingRouter.post(
   '/punch-out',
+  requirePermission(PERMISSIONS.PUNCH_CLOCK),
   validateBody(punchOutRequestSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -80,6 +83,7 @@ timeTrackingRouter.get(
 
 timeTrackingRouter.post(
   '/breaks',
+  requirePermission(PERMISSIONS.PUNCH_CLOCK),
   validateBody(breakStartRequestSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;
@@ -91,6 +95,7 @@ timeTrackingRouter.post(
 
 timeTrackingRouter.post(
   '/breaks/:id/end',
+  requirePermission(PERMISSIONS.PUNCH_CLOCK),
   validateBody(breakEndRequestSchema),
   asyncHandler(async (req, res) => {
     const db = res.locals.db;

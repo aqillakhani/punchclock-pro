@@ -50,6 +50,12 @@ export const PERMISSIONS = {
   VIEW_SCHEDULE: 'view:schedule',
   EDIT_SCHEDULE: 'edit:schedule',
 
+  // Pay periods. Viewing the payroll calendar is a manager concern;
+  // locking it is the owner's, because a lock is the assertion that
+  // payroll for those dates is final.
+  VIEW_PAY_PERIODS: 'view:pay-periods',
+  LOCK_PAY_PERIOD: 'lock:pay-period',
+
   // Org-wide timesheets + reports + payroll export.
   VIEW_TIMESHEETS: 'view:timesheets',
   VIEW_REPORTS: 'view:reports',
@@ -103,6 +109,8 @@ const OWNER_PERMISSIONS: ReadonlySet<Action> = new Set<Action>([
   PERMISSIONS.DELETE_USER,
   PERMISSIONS.VIEW_SCHEDULE,
   PERMISSIONS.EDIT_SCHEDULE,
+  PERMISSIONS.VIEW_PAY_PERIODS,
+  PERMISSIONS.LOCK_PAY_PERIOD,
   PERMISSIONS.VIEW_TIMESHEETS,
   PERMISSIONS.VIEW_REPORTS,
   PERMISSIONS.EXPORT_PAYROLL,
@@ -140,6 +148,9 @@ const MANAGER_PERMISSIONS: ReadonlySet<Action> = new Set<Action>([
   PERMISSIONS.INVITE_USER,
   PERMISSIONS.VIEW_SCHEDULE,
   PERMISSIONS.EDIT_SCHEDULE,
+  // Managers see whether a period is locked (it governs what they may
+  // edit) but only an owner may lock or unlock one.
+  PERMISSIONS.VIEW_PAY_PERIODS,
   PERMISSIONS.VIEW_TIMESHEETS,
   PERMISSIONS.VIEW_REPORTS,
   PERMISSIONS.VIEW_DOCUMENTS_OWN,
@@ -168,6 +179,7 @@ const VIEWER_PERMISSIONS: ReadonlySet<Action> = new Set<Action>([
   PERMISSIONS.VIEW_OVERVIEW,
   PERMISSIONS.VIEW_TEAM,
   PERMISSIONS.VIEW_SCHEDULE,
+  PERMISSIONS.VIEW_PAY_PERIODS,
   PERMISSIONS.VIEW_TIMESHEETS,
   PERMISSIONS.VIEW_REPORTS,
 ]);

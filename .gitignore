@@ -60,3 +60,8 @@ secrets/
 # E2E run artifacts — the scripts regenerate these on every run.
 tools/e2e-*.png
 tools/prod-e2e-*.png
+tools/recon/
+tools/e2e-prod/
+tools/e2e-prod2/
+tools/e2e-corr/
+tools/e2e-investigate/
