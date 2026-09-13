@@ -3,7 +3,9 @@
 **This is the only document you need to start using the system.** It is written for
 the person taking it over, not for a programmer. Follow it top to bottom.
 
-Everything below was verified against the live system on **11 September 2026**.
+Everything below was verified against the live system on **13 September 2026** — by
+signing in and using it, not by reading the code. See
+[What has actually been tested](#what-has-actually-been-tested).
 
 ---
 
@@ -55,6 +57,25 @@ manager today.
 | **Manager** | Run the day: schedule, timesheets, approve time off and corrections, add employees. Cannot see Settings, payroll export, or the audit log. |
 | **Employee** | Clock in/out, see their own hours and schedule, request time off, ask for a correction. |
 | **Viewer** | Read-only. Can look at the team, schedule, timesheets and reports. Cannot clock in or change anything. |
+
+---
+
+## Fix these four things first
+
+Found by testing the live system on 13 September 2026. None takes more than a
+few minutes, and the first two will look wrong to anyone you hand this to.
+
+1. **Your organization is called "pretty robes."** It is left over from an early
+   test and shows at the top of every screen. Rename it in
+   **Settings → Organization name**.
+2. **The timezone is `America/Chicago`.** If that is not where your staff work,
+   change it in **Settings → Default timezone** *before* anyone clocks in —
+   every hour, overtime total and pay period is calculated in it.
+3. **The owner account has a shift left open since 21 July 2026.** Until it is
+   closed, that account cannot punch in. Go to **Timesheets**, find the open
+   entry, edit it and set a punch-out time.
+4. **`notreal@gmail.com` is a leftover test employee with no password.** Either
+   delete it from **Team**, or send it a sign-in link if you want to keep it.
 
 ---
 
@@ -404,6 +425,47 @@ export it as `FLY_API_TOKEN` rather than re-running `flyctl auth login`.
    password recovery in one go.
 6. Rotate `JWT_SECRET` and the database password once the handover is complete, so the
    previous holder's copies stop being live credentials.
+
+---
+
+## What has actually been tested
+
+Not "it should work" — this was driven in a real browser against the live
+system on 13 September 2026, signing in as an owner, an employee and a
+read-only viewer.
+
+**Confirmed working end to end:**
+
+- Signing in, and signing out
+- Punching in and out — a real shift was created, closed, and appeared on the
+  timesheet with the correct hours
+- Adding a worker, copying the sign-in link, the worker setting their own
+  password and signing in **on a phone** — the whole onboarding path
+- A worker asking for a time correction, and an owner approving it. An owner
+  cannot approve their own request; the system requires a second person
+- Requesting time off
+- Creating a shift on the schedule
+- Downloading payroll as CSV and as QuickBooks `.iif`
+- All 16 screens load with no errors, and the role restrictions hold
+- Timezone handling is correct (09:00 Chicago is stored as 14:00 UTC)
+
+**Found and fixed during that testing** — seven permission holes in the API,
+each confirmed against the live system and re-tested afterwards:
+
+- A read-only **viewer could clock in** and create payroll hours
+- The mobile sync endpoint was a second way to do the same thing
+- An **employee could read every colleague's punches, GPS locations and breaks**
+- An employee could read any colleague's schedule
+- Any signed-in user could read your labour budget, punch-verification settings
+  and **exact store coordinates**
+
+All seven are closed and covered by tests so they cannot come back quietly.
+Nobody could ever *change* anything they shouldn't — these were all about
+reading, except the viewer clock-in.
+
+**Not yet testable:** pay-period locking and auto clock-out have no screens
+until pull request #4 is merged (Section 9). The engine behind them is live and
+tested.
 
 ---
 
