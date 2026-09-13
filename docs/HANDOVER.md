@@ -74,8 +74,10 @@ few minutes, and the first two will look wrong to anyone you hand this to.
 3. **The owner account has a shift left open since 21 July 2026.** Until it is
    closed, that account cannot punch in. Go to **Timesheets**, find the open
    entry, edit it and set a punch-out time.
-4. **`notreal@gmail.com` is a leftover test employee with no password.** Either
-   delete it from **Team**, or send it a sign-in link if you want to keep it.
+4. **`notreal@gmail.com` is a leftover test employee with no password.** It also has
+   one old shift and a pending time-off request attached to it, which will sit in your
+   **Time off** queue forever. Either delete the account from **Team**, or send it a
+   sign-in link if you want to keep it.
 
 ---
 
@@ -169,9 +171,10 @@ records the punch without a location. Nobody gets stuck.
 > punch-out time (you must give a reason; it is recorded).
 >
 > **The automatic safety net is now deployed but switched off.** A job runs every hour
-> looking for shifts left open too long. It does nothing until you choose a cut-off in
-> **Settings → Payroll & shifts → Clock-out after (hours)**. Pick something safely
-> longer than your longest real shift — 12 or 16 hours suits most businesses.
+> looking for shifts left open too long. It does nothing until you turn it on in
+> **Settings → Payroll & shifts**: tick the auto clock-out box, then set
+> **Clock-out after (hours)**. Anything from 1 to 24 hours is accepted — pick something
+> safely longer than your longest real shift, so 12 or 16 suits most businesses.
 >
 > When it fires, it closes the shift at **punch-in plus your cut-off**, not at the
 > moment it noticed — so the hours are predictable and the same every time. Closed
@@ -299,15 +302,12 @@ about them before you rely on it.
 9. **Old data is kept forever.** GPS locations and pay rates are never deleted, and
    there is no retention policy. Worth a look if you have privacy obligations.
 
-Items 4 and 5, plus automatic clean-up of old audit records, were **deployed to the API
-on 13 September 2026** (version `9a83921`, database migration 008). The hourly and daily
-background jobs are confirmed running. Both features are inert until you configure them,
-which is intentional — see Sections 4 and 6.
-
-**One step is still outstanding:** the matching screens (**Pay periods**, and the new
-Payroll & shifts block in **Settings**) only appear once PR #4 is merged on GitHub,
-which redeploys the website. Until then the API supports both features but there is no
-button to press. See Section 9.
+Items 4 and 5, plus automatic clean-up of old audit records, were **deployed on
+13 September 2026** (database migration 008). The hourly and daily background jobs are
+confirmed running, and the screens that drive them are live — **Pay periods** in the
+left menu, and the **Payroll & shifts** block in **Settings**. Both features are inert
+until you configure them, which is deliberate: switching either one on changes what
+people get paid. See Sections 4 and 6.
 
 ---
 
@@ -362,26 +362,27 @@ SELECT email, role, password_hash IS NOT NULL AS has_password, last_login_at
 FROM users WHERE deleted_at IS NULL;
 ```
 
-### State of the API deploy (13 September 2026)
+### State of the deploy (13 September 2026)
 
-**Done and verified in production:**
+Each line here was checked against production, not inferred from the code.
 
-- Migration 008 applied. `schema_migrations` now ends at
+- **Migration 008 applied.** `schema_migrations` ends at
   `008_pay_periods_and_auto_clock_out.sql`; `pay_periods` exists with RLS enabled *and*
   forced, and `punchclock_app` picked up its grants automatically through the
   `ALTER DEFAULT PRIVILEGES` in `create-app-role.ts` — no manual GRANT needed.
-- API deployed at `APP_VERSION=9a83921`. `/health` →
-  `{"status":"ok","version":"9a83921","db":"up","redis":"disabled"}`.
-- Scheduler confirmed in the logs: `auto-clock-out` every 3,600,000 ms,
+- **API deployed at `APP_VERSION=44b3275`,** the merge commit of PR #4. `/health` →
+  `{"status":"ok","version":"44b3275","db":"up","redis":"disabled"}`.
+- **Scheduler confirmed in the logs:** `auto-clock-out` every 3,600,000 ms,
   `prune-audit-logs` every 86,400,000 ms.
+- **Web deployed from `main` at `8fa016b`,** built by Vercel automatically on merge.
+- **PRs #4, #5 and #6 are merged, CI green.**
 
-**Still outstanding — needs push access to `aqillakhani/punchclock-pro`:**
-
-PR #4 is green, mergeable and clean, but **not merged**. `main` therefore does not yet
-contain the deployed code, which matters for two reasons: the website is still built
-from the old `main` (so the new screens are missing), and **anyone redeploying from
-`main` today would roll the API backwards**. Merge it, and Vercel rebuilds the web on
-its own.
+**There is no drift between `main` and production.** Every commit on `main` after
+`44b3275` touches only `packages/web/` and `tools/` — `git diff --name-only
+44b3275..main` lists no API or shared code — so the running API is current and
+redeploying from `main` is a no-op rather than a rollback. Check that assumption again
+before any future deploy; it is only true while nobody has landed API changes without
+shipping them.
 
 The deploy command, for next time — **migration first, or every punch breaks**:
 
@@ -409,21 +410,19 @@ export it as `FLY_API_TOKEN` rather than re-running `flyctl auth login`.
 | `docs/permissions.md` | The complete role/permission matrix |
 | `docs/onboarding-workers.md` | The invite-link flow in depth, and how to switch email on |
 | `docs/time-corrections.md` | How the correction workflow behaves |
-| `docs/pay-periods-and-auto-clock-out.md` | The undeployed PR #4 features |
+| `docs/pay-periods-and-auto-clock-out.md` | Pay-period locking and auto clock-out, in depth |
 | `docs/security-rls-bypass.md` | History of the tenant-isolation fix |
 
 ### Recommended before you rely on this
 
 1. Put every credential in a shared password manager. Today.
-2. **Merge PR #4** so `main` matches what is deployed and the web picks up the new
-   screens. Until then a redeploy from `main` silently rolls the API back.
-3. Point an uptime monitor at `https://punchclock-api.fly.dev/health` with alerts to a
-   real phone.
-4. Add a nightly `pg_dump` to off-box storage, then **actually rehearse a restore.**
+2. Point an uptime monitor at `https://punchclock-api.fly.dev/health` with alerts to a
+   real phone. Nothing currently tells anyone when this stops working.
+3. Add a nightly `pg_dump` to off-box storage, then **actually rehearse a restore.**
    Five days of snapshots with an untested procedure is not a backup.
-5. Switch on email (Resend account + verified domain), which fixes invitations and
+4. Switch on email (Resend account + verified domain), which fixes invitations and
    password recovery in one go.
-6. Rotate `JWT_SECRET` and the database password once the handover is complete, so the
+5. Rotate `JWT_SECRET` and the database password once the handover is complete, so the
    previous holder's copies stop being live credentials.
 
 ---
@@ -463,9 +462,19 @@ All seven are closed and covered by tests so they cannot come back quietly.
 Nobody could ever *change* anything they shouldn't — these were all about
 reading, except the viewer clock-in.
 
-**Not yet testable:** pay-period locking and auto clock-out have no screens
-until pull request #4 is merged (Section 9). The engine behind them is live and
-tested.
+**Also confirmed, after the final deploy:**
+
+- **Pay periods** lists each period and its state; locking a period and unlocking
+  it again both worked, and unlocking demanded a written reason
+- The **Payroll & shifts** settings block offers the pay-period schedule and the
+  auto clock-out cut-off
+- An employee typing `/dashboard/settings`, `/dashboard/audit-log` or
+  `/dashboard/pay-periods` straight into the address bar is refused, and can still
+  reach their own Clock In/Out screen
+- A read-only viewer is refused the Clock screen outright
+
+Every test account and every row those tests created has been deleted from the live
+system. What remains is your own data.
 
 ---
 
