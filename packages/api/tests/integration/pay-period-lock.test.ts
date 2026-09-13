@@ -8,6 +8,7 @@
  * create / edit / delete.
  */
 import request from 'supertest';
+import { CORRECTION_MAX_AGE_DAYS } from '@punchclock/shared';
 import {
   testApp,
   seedOrg,
@@ -39,7 +40,15 @@ afterAll(async () => {
   await closePool();
 });
 
-/** A Monday-start week well inside the 60-day correction window. */
+/**
+ * A Monday-start week `weeksAgo` weeks back. Periods are weekly here (see the
+ * org setup above), so each `weeksAgo` is its own period and locking one week
+ * never touches another.
+ *
+ * NOTE: this says nothing about the 60-day correction window. Anything from
+ * about 8 weeks back is already too old to file a correction against — use
+ * `correctionWeek()` when the test posts to /me/corrections.
+ */
 function recentWeek(weeksAgo: number): { start: string; iso: (h: number) => string } {
   const d = new Date();
   d.setUTCHours(0, 0, 0, 0);
@@ -58,6 +67,26 @@ function recentWeek(weeksAgo: number): { start: string; iso: (h: number) => stri
       return x.toISOString();
     },
   };
+}
+
+/**
+ * Same as `recentWeek`, but asserts the entry it produces is comfortably inside
+ * `CORRECTION_MAX_AGE_DAYS`. Filing a correction against an older shift is
+ * refused with a 422, which surfaces as a baffling "expected 201, got 422" that
+ * appears only once the calendar drifts far enough — this file failed exactly
+ * that way, having passed four days earlier.
+ */
+function correctionWeek(weeksAgo: number): ReturnType<typeof recentWeek> {
+  const week = recentWeek(weeksAgo);
+  const ageDays = (Date.now() - new Date(week.iso(9)).getTime()) / 86_400_000;
+  const budget = CORRECTION_MAX_AGE_DAYS - 7; // a week of slack, whatever day it runs
+  if (ageDays > budget) {
+    throw new Error(
+      `recentWeek(${weeksAgo}) is ${ageDays.toFixed(1)} days old, past the ${budget}-day ` +
+        `budget for filing a correction (limit ${CORRECTION_MAX_AGE_DAYS}). Pick a nearer week.`,
+    );
+  }
+  return week;
 }
 
 /** Not async — callers chain `.expect(...)`, which needs the supertest Test. */
@@ -247,7 +276,7 @@ describe('a locked period refuses retroactive change', () => {
 
 describe('approving a request after the period is locked', () => {
   it('is refused even though the request was filed while it was open', async () => {
-    const week = recentWeek(7);
+    const week = correctionWeek(3);
     const entryId = await insertCompletedEntry(org.id, org.employee.id, week.iso(9), week.iso(17));
 
     // Filed while still open…
@@ -281,7 +310,7 @@ describe('approving a request after the period is locked', () => {
   });
 
   it('can still be REJECTED, since that changes no hours', async () => {
-    const week = recentWeek(8);
+    const week = correctionWeek(1);
     const entryId = await insertCompletedEntry(org.id, org.employee.id, week.iso(9), week.iso(17));
     const req = await request(app)
       .post('/api/v1/me/corrections')
